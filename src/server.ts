@@ -334,7 +334,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
          `${Math.round(MAX_OUTPUT_BYTES / 1024)} KiB per stream; truncated streams provide an output_path to the saved output. ` +
         "With background=true returns a job id immediately instead; no timeout unless timeout_ms is set. " +
         "Use job_output, job_wait and job_kill to manage it. Background stdout/stderr share a rolling buffer. " +
-        "sudo, su and tsu are blocked; use run_root_command or shell_open_root for root access.",
+        "Explicit sudo, su and tsu invocations are blocked, not mentions in data; use run_root_command or shell_open_root for root access.",
       inputSchema: {
         project_id: projectIdSchema,
         command: z.string().min(1).describe("The command line to run, e.g. `ls -la ~/projects`"),
@@ -425,7 +425,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     title: "Open persistent shell",
     description: "Open a pipe-based user shell, preserving cwd, variables and functions across sends. " +
       "Returns shell_id. Survives client reconnects, not server restarts. No PTY or interactive stdin. " +
-      "At most 16 shells; send 'exit' when finished. sudo, su and tsu are blocked; use shell_open_root for root.",
+      "At most 16 shells; send 'exit' when finished. Explicit sudo, su and tsu invocations are blocked, not mentions in data; use shell_open_root for root.",
     inputSchema: {
       project_id: projectIdSchema,
       cwd: z.string().optional().describe("Working directory (default home); ~ is expanded"),

@@ -3,12 +3,37 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { ShellManager, type ShellSnapshot } from "../persistent-shell.js";
-import { requireRegularCommand } from "../command-policy.js";
+import { requireRegularCommand, requireRegularEnvironment } from "../command-policy.js";
 
-for (const command of ["sudo id", "su -c id", "tsu", "/system/bin/su", "true && tsu", "$(sudo id)", "s'u'do id", "t\\su", "bash -c 'su -c id'", "s\\\nu id"]) {
-  assert.throws(() => requireRegularCommand(command), /blocked/);
+for (const command of [
+  "sudo id", "su -c id", "tsu", "/system/bin/su", "true && tsu", "$(sudo id)",
+  "s'u'do id", "t\\su", "bash -c 'su -c id'", "s\\\nu id", "echo $(sudo id)",
+  'echo "$(tsu)"', "echo `su -c id`", "env NAME=sudo command -- tsu", "exec /system/bin/su",
+  "if true; then sudo id; fi", "X='data' sudo id", "true | tsu", ">/dev/null sudo id",
+  "eval 'sudo id'", "cat <<EOF\n$(sudo id)\nEOF", "f() { tsu; }",
+  "case x in sudo) true ;; *) tsu ;; esac",
+  "[[ $(tsu) == sudo ]]", "(( $(sudo id) + 1 ))",
+  "command sudo -v", "bash -O extglob -c 'tsu'",
+]) {
+  assert.throws(() => requireRegularCommand(command), /blocked/, command);
 }
-for (const command of ["true", "echo usual", "ls /some/superuser", "printf '%s' sushi"]) requireRegularCommand(command);
+for (const command of [
+  "true", "echo usual", "ls /some/superuser", "printf '%s' sushi", "echo sudo su tsu",
+  "grep -n 'sudo|su|tsu' src/server.ts", "printf '%s' 'sudo id; tsu'", "cat /tmp/sudo",
+  "echo s'u'do", "# sudo id\necho tsu", "echo ok # sudo id", "NAME=sudo true",
+  "bash -c 'echo sudo'", "bash -c 'printf \"%s\" \"sudo; tsu\"'", "command -v sudo",
+  "cat <<'EOF'\nsudo id\n$(tsu)\nEOF", "cat <<EOF\nsudo su tsu\nEOF",
+  "cat <<-EOF\n\tsudo\n\tEOF", "for name in sudo su tsu; do echo $name; done",
+  'echo "$((sudo + 1))"', "echo '$(sudo id)'", "echo \\$(echo sudo)",
+  "python -c 'print(\"sudo\")'", "echo ok > /tmp/tsu", "printf '%s' 'su\\ndo'",
+  "case sudo in su) echo sudo ;; tsu) echo su ;; *) echo tsu ;; esac",
+  "[[ sudo == sudo || tsu == su ]]", "((sudo += 1))", "bash script.sh -c 'sudo'",
+  "command -pv sudo", "env --help sudo",
+  "echo\vsudo", "echo\fsu", "echo\u00a0tsu",
+]) requireRegularCommand(command);
+requireRegularEnvironment({ PATH: "/tmp/sudo", TEXT: "sudo; tsu", BASH_ENV: "/tmp/sudo", ENV: "/tmp/tsu" });
+assert.throws(() => requireRegularEnvironment({ BASH_ENV: "$(sudo id)" }), /blocked/);
+assert.throws(() => requireRegularEnvironment({ "BASH_FUNC_test%%": "() { tsu; }" }), /blocked/);
 
 const manager = new ShellManager(process.env.MCP_SHELL || "bash", 1024, 2);
 try {
@@ -16,7 +41,7 @@ try {
   const shell = manager.get(first.shell_id);
   await assert.rejects(shell.send("tsu", 0), /blocked/);
   assert.equal((await shell.send("echo still-idle", 1000)).output, "still-idle\n");
-  await assert.rejects(manager.open(os.homedir(), { BASH_ENV: "/tmp/sudo" }), /blocked/);
+  assert.equal((await shell.send("printf '%s' 'sudo su tsu'", 1000)).output, "sudo su tsu");
   const forbidden = new ShellManager("/system/bin/su", 1024);
   await assert.rejects(forbidden.open(os.homedir()), /blocked/);
   const second = await manager.open(os.homedir());

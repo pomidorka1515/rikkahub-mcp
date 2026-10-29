@@ -89,7 +89,23 @@ try {
     }
     assert.ok((await call("shell_send", { shell_id: shell.shell_id, cmd: command })).isError);
   }
-  assert.ok((await call("shell_open", { env: { BASH_ENV: "/tmp/tsu" } })).isError);
+  assert.ok((await call("shell_open", { env: { BASH_ENV: "$(tsu)" } })).isError);
+  const benign = "printf '%s' 'sudo su tsu'";
+  for (const background of [false, true]) {
+    const result = await call("run_command", { command: benign, background, env: { POLICY_DATA: "sudo su tsu" } });
+    assert.ok(!result.isError, JSON.stringify(result));
+    if (background) {
+      const benignJob = json(result) as JobStatus;
+      assert.equal(json(await call("job_wait", { ids: [benignJob.id], wait_ms: 5000 })).ready, true);
+      assert.equal(json(await call("job_output", { id: benignJob.id })).output, "sudo su tsu");
+    } else {
+      assert.match(result.content[0]!.type === "text" ? result.content[0]!.text : "", /sudo su tsu/);
+    }
+  }
+  assert.equal(snapshot(await call("shell_send", { shell_id: shell.shell_id, cmd: benign, wait_ms: 1000 })).output, "sudo su tsu");
+  const dataShell = snapshot(await call("shell_open", { env: { POLICY_DATA: "sudo su tsu" } }));
+  assert.equal(snapshot(await call("shell_send", { shell_id: dataShell.shell_id, cmd: 'printf "%s" "$POLICY_DATA"', wait_ms: 1000 })).output, "sudo su tsu");
+  snapshot(await call("shell_send", { shell_id: dataShell.shell_id, cmd: "exit", wait_ms: 1000 }));
   const blockedExecute = json(await call("execute", {
     code: '(await tools.run_command({command:"tsu"})).isError',
   }));

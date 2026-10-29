@@ -467,10 +467,14 @@ shell_send      {"shell_id":"…","cmd":"exit"}        → when finished
 ```
 
 regular `run_command` calls (including background jobs) and regular shell sends
-reject explicit `sudo`, `su` and `tsu` names, including paths and quoted names.
-the conservative check also rejects these names in command text or supplied
-environment values, even when used as data. regular `shell_open` cannot select
-these programs as its shell. use `run_root_command` or `shell_open_root` instead.
+reject explicit `sudo`, `su` and `tsu` invocations, including paths and quoted
+command names. arguments, comments, literal heredoc bodies, and ordinary
+environment values may contain those names as data. command substitutions,
+common command wrappers, shell `-c` scripts, and `eval` are checked as commands;
+startup environment checks cover expansions in `BASH_ENV`/`ENV` and exported
+bash functions, not ordinary values or the contents of startup files.
+regular `shell_open` cannot select these programs as its shell.
+use `run_root_command` or `shell_open_root` for elevation instead.
 this is a tool-level policy, not a security sandbox: scripts, interpreters and
 dynamically constructed commands are not confined by an operating-system boundary.
 
