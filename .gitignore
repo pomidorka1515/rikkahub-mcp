@@ -4,4 +4,4 @@ dist/
 *.log
 *.md
 !README.md
-
+!rikkahub-assistant.md

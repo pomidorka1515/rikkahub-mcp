@@ -30,15 +30,14 @@ legacy **SSE** clients can use `http://127.0.0.1:8765/sse?token=<token>`.
 the token is in `~/.config/rikkahub-mcp/token`, or use an
 `Authorization: Bearer <token>` header instead of `?token=`.
 
-the source is strict TypeScript in `src/`, with tests in `src/tests/`, compiled to
-`dist/` and `dist/tests/`. both `./start.sh` and `npm start` build before launching the server.
-use `npm run typecheck` to check types without emitting js, or
-`npm run build` to compile.
+### Setting up an assistant
 
-self-test from Termux with the server running: `npm test`. this exercises both
-transports and the root tool, including file writes and timeout checks.
-run `npm run test:shell` for isolated persistent-shell tests (no running server
-or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
+Settings → Assistants → "+" → make a new assistant
+click on your assistant:
+1) Prompts → System Prompt → paste the contents of `rikkahub-assistant.md`
+2) MCP → enable the MCP server
+3) Local Tools → enable `Clipboard`, `Time Info`, `Ask Questions`, `Chart Display`
+
 
 ## Tools
 
