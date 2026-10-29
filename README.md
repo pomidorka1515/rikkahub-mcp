@@ -44,7 +44,10 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 
 | tool | does |
 |---|---|
-| `run_command` | run a bash one-liner (`cwd`, `timeout_ms`, `env` optional) → stdout + stderr + exit code |
+| `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); `background: true` returns a job `id` immediately |
+| `job_output` | consume unread job logs with `{id, lines?}` and return status |
+| `job_kill` | stop a job's process group with `{id}` |
+| `job_wait` | wait for one or more jobs with `{ids, mode?, wait_ms?}` |
 | `run_root_command` | same, but as UID 0 via `tsu` (`preserve_env` optional) |
 | `shell_open` | open a persistent user shell (`cwd`, `env` optional) → `shell_id` |
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
@@ -94,6 +97,45 @@ output is capped by `MCP_MAX_OUTPUT_BYTES` with a truncation notice
 glob {"pattern":"**/*.ts","path":"~/my-project"}
 grep {"pattern":"TODO|FIXME","path":"~/my-project","include":"*.ts"}
 ```
+
+### background jobs
+
+start a server without blocking the chat, then inspect its logs:
+
+```text
+run_command {"command":"npm run dev","cwd":"~/my-project","background":true}
+job_output  {"id":"…","lines":100}
+job_kill    {"id":"…"}
+job_wait    {"ids":["…"],"wait_ms":30000}
+```
+
+for parallel builds or tests, pass multiple ids to `job_wait`. `mode: "all"`
+(default) waits for every job; `mode: "any"` returns when at least one has exited,
+including jobs that already finished. waits default to 30000 ms, accept 0–30000,
+and never kill jobs. `ready: false` means the wait expired; call again as needed.
+waiting returns statuses without consuming logs. a running app server normally
+never exits, so use `job_output` and a health check rather than waiting for completion.
+
+* background jobs have no timeout unless `timeout_ms` is explicitly supplied
+  (capped by `MCP_MAX_TIMEOUT_MS`). foreground commands keep their existing timeout.
+* status includes `id`, `state` (`running` or `exited`), `exit_code`, `signal`,
+  `timed_out`, `error`, `duration_ms`, `buffered_bytes`, and `dropped_bytes`.
+  check the exit code and timeout/error fields; a job exiting unsuccessfully is
+  reported in status, not as a tool error.
+* output merges stdout/stderr and consumes up to `lines` (default 100, maximum
+  10000), including partial lines. the rolling buffer keeps the most recent
+  `MCP_MAX_OUTPUT_BYTES`; `dropped_bytes` counts overflow since the last output read.
+* `job_kill` sends sigterm to the process group and escalates to sigkill after
+  3 seconds. it returns immediately; wait to confirm termination, then drain logs.
+* jobs are non-interactive, run as the termux user, and do not share shell state.
+  run commands directly, without appending `&` or daemonizing them.
+* jobs survive reconnects and work across both transports and stateless requests.
+  the same token grants access to every job. shutdown kills running jobs; restarts
+  lose ids and logs. at most 32 jobs are retained; when full, starting a new job
+  evicts the oldest completed job, or fails if all are running.
+
+run `npm run test:jobs` for isolated job and transport tests, without root or a
+running server.
 
 ### Persistent shells
 
@@ -178,10 +220,10 @@ This is a RCE endpoint by design, so it is locked down:
 * binds to `127.0.0.1` only, no LAN, no Wi-Fi, no ADB exposure;
 * every request needs the 192-bit random token;
   auto-generated `0600` in `~/.config/rikkahub-mcp/token`;
-* `run_command` / `run_root_command` have per-command timeouts with process-group
-  kill; persistent shells intentionally run until completion or interruption;
+* foreground `run_command` / `run_root_command` have per-command timeouts with
+  process-group kill; background jobs and persistent shells have no default timeout;
 * output capped at 128 KiB per stream for timed commands, or a 128 KiB merged
-  rolling buffer per persistent shell
+  rolling buffer per persistent shell or background job
 
 anyone who can read the token file can run commands as you;
  **and**, via `run_root_command`, as root. 

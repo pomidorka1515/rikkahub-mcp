@@ -8,6 +8,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { ShellSnapshot } from "../persistent-shell.js";
+import type { JobStatus } from "../jobs.js";
 
 // Isolated server: does not restart the user's server or require root.
 const probe = net.createServer();
@@ -39,11 +40,18 @@ try {
   clients.push(client);
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers } }));
   const names = (await client.listTools()).tools.map((tool) => tool.name);
-  for (const name of ["grep", "glob", "shell_open", "shell_send", "shell_read", "shell_interrupt"]) assert.ok(names.includes(name));
+  for (const name of ["grep", "glob", "shell_open", "shell_send", "shell_read", "shell_interrupt", "job_output", "job_wait", "job_kill"]) assert.ok(names.includes(name));
   const opened = CallToolResultSchema.parse(await client.callTool({ name: "shell_open", arguments: {} }));
   const first = opened.content[0];
   assert.equal(first?.type, "text");
   const shell = JSON.parse(first!.type === "text" ? first!.text : "") as ShellSnapshot;
+  const started = CallToolResultSchema.parse(await client.callTool({
+    name: "run_command", arguments: { command: "echo ready; sleep 30", background: true },
+  }));
+  assert.ok(!started.isError);
+  const jobText = started.content[0];
+  const job = JSON.parse(jobText!.type === "text" ? jobText!.text : "") as JobStatus;
+  assert.equal(job.state, "running");
   await client.close();
 
   let id = 0;
@@ -62,6 +70,18 @@ try {
     assert.equal(text?.type, "text");
     return JSON.parse(text!.type === "text" ? text!.text : "") as ShellSnapshot;
   };
+  const json = (result: ReturnType<typeof CallToolResultSchema.parse>) => {
+    assert.ok(!result.isError, JSON.stringify(result));
+    const text = result.content[0];
+    assert.equal(text?.type, "text");
+    return JSON.parse(text!.type === "text" ? text!.text : "");
+  };
+  assert.equal(json(await call("job_wait", { ids: [job.id], wait_ms: 20 })).ready, false);
+  assert.equal(json(await call("job_output", { id: job.id, lines: 1 })).output, "ready\n");
+  assert.ok((await call("job_output", { id: "missing" })).isError);
+  assert.ok((await call("job_wait", { ids: [] })).isError);
+  assert.ok((await call("job_wait", { ids: [job.id], wait_ms: 30001 })).isError);
+  assert.ok((await call("run_command", { command: "true", background: true, cwd: "/nonexistent-job-cwd" })).isError);
   // No Mcp-Session-Id: each request builds a separate MCP server instance.
   const sent = snapshot(await call("shell_send", { shell_id: shell.shell_id, cmd: "export RECONNECT_TEST=yes; sleep 30", wait_ms: 50 }));
   assert.equal(sent.state, "running");
@@ -72,6 +92,15 @@ try {
   const sse = new Client({ name: "shell-sse-test", version: "1" });
   clients.push(sse);
   await sse.connect(new SSEClientTransport(new URL(`${base}/sse?token=${token}`)));
+  json(CallToolResultSchema.parse(await sse.callTool({ name: "job_kill", arguments: { id: job.id } })));
+  assert.equal(json(await call("job_wait", { ids: [job.id], mode: "all", wait_ms: 5000 })).ready, true);
+  const complete = json(await call("run_command", { command: "exit 4", background: true }));
+  const waited = json(await call("job_wait", { ids: [job.id, complete.id], wait_ms: 5000 }));
+  assert.equal(waited.ready, true);
+  assert.equal(waited.jobs[1].exit_code, 4);
+  const foreground = await call("run_command", { command: "echo foreground" });
+  assert.ok(!foreground.isError);
+  assert.match(foreground.content[0]!.type === "text" ? foreground.content[0]!.text : "", /foreground/);
   const continued = snapshot(CallToolResultSchema.parse(await sse.callTool({
     name: "shell_send", arguments: { shell_id: shell.shell_id, cmd: "echo $RECONNECT_TEST" },
   })));

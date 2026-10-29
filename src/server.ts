@@ -15,6 +15,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ShellManager, type ShellSnapshot } from "./persistent-shell.js";
 import { registerSearchTools } from "./search-tools.js";
 import { registerReadTool } from "./read-tool.js";
+import { JobManager } from "./jobs.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -88,6 +89,7 @@ const MAX_OUTPUT_BYTES = Number(process.env.MCP_MAX_OUTPUT_BYTES || 128 * 1024);
 const NO_AUTH = process.env.MCP_NO_AUTH === "1";
 const JSON_RESPONSES = process.env.MCP_JSON_RESPONSE !== "0";
 const shells = new ShellManager(SHELL, MAX_OUTPUT_BYTES);
+const jobs = new JobManager(SHELL, MAX_OUTPUT_BYTES);
 
 const CONFIG_DIR = path.join(
   process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
@@ -315,7 +317,9 @@ function buildServer(): McpServer {
         "Shell access to this Android device's Termux environment (user " +
         `${os.userInfo().username}, home ${os.homedir()}). ` +
         "Shared storage is at ~/storage/shared or /sdcard. Commands run in bash, " +
-        "non-interactively. Use run_command for timed commands, or shell_open/send/read/interrupt " +
+        "non-interactively. Use run_command with background=true for app servers and background tasks; " +
+        "save the job id, inspect job_output, wait for completion with job_wait, and stop with job_kill. " +
+        "Use shell_open/send/read/interrupt " +
         "for persistent shells and long builds. Save shell_id; check state and exit_code before assuming success.",
     },
   );
@@ -329,7 +333,9 @@ function buildServer(): McpServer {
         "Runs non-interactively with a timeout (default " +
         `${DEFAULT_TIMEOUT_MS / 1000}s, max ${MAX_TIMEOUT_MS / 1000}s). ` +
         "Pipes, redirects, &&, globs all work. Output is capped at " +
-        `${Math.round(MAX_OUTPUT_BYTES / 1024)} KiB per stream.`,
+        `${Math.round(MAX_OUTPUT_BYTES / 1024)} KiB per stream. ` +
+        "With background=true returns a job id immediately instead; no timeout unless timeout_ms is set. " +
+        "Use job_output, job_wait and job_kill to manage it. Background stdout/stderr share a rolling buffer.",
       inputSchema: {
         command: z.string().min(1).describe("The command line to run, e.g. `ls -la ~/projects`"),
         cwd: z.string().optional().describe("Working directory (default: home). ~ is expanded."),
@@ -340,15 +346,66 @@ function buildServer(): McpServer {
           .optional()
           .describe(`Timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS})`),
         env: z.record(z.string(), z.string()).optional().describe("Extra environment variables"),
+        background: z.boolean().optional().describe("Return a job id immediately; default false. No default timeout for background jobs."),
       },
       annotations: { openWorldHint: true, readOnlyHint: false },
     },
-    async ({ command, cwd, timeout_ms, env }): Promise<CallToolResult> => {
+    async ({ command, cwd, timeout_ms, env, background }): Promise<CallToolResult> => {
+      if (background) {
+        try {
+          const job = await jobs.start(command, path.resolve(expandHome(cwd || "~")), env,
+            timeout_ms === undefined ? undefined : Math.min(timeout_ms, MAX_TIMEOUT_MS));
+          return { content: [{ type: "text", text: JSON.stringify(job) }] };
+        } catch (error) {
+          return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
+        }
+      }
       const t = Math.min(timeout_ms || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
       const r = await runCommand(command, { cwd, timeoutMs: t, env });
       return { content: [{ type: "text", text: r.text }], isError: !r.ok };
     },
   );
+
+  const jobResult = async (action: () => unknown | Promise<unknown>): Promise<CallToolResult> => {
+    try {
+      return { content: [{ type: "text", text: JSON.stringify(await action()) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
+    }
+  };
+  const jobId = z.string().min(1).describe("id returned by run_command with background=true");
+  server.registerTool("job_output", {
+    title: "Read background job output",
+    description: "Consume unread merged stdout/stderr, including partial lines, and return job status. " +
+      "Defaults to 100 lines, maximum 10000. The rolling buffer retains MCP_MAX_OUTPUT_BYTES; " +
+      "dropped_bytes reports overflow since the last read. Jobs survive reconnects, not server restarts. " +
+      "At most 32 jobs are retained; the oldest completed job is evicted when space is needed.",
+    inputSchema: { id: jobId, lines: z.number().int().min(1).max(10_000).optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  }, ({ id, lines }) => jobResult(() => jobs.get(id).read(lines ?? 100)));
+
+  server.registerTool("job_kill", {
+    title: "Stop background job",
+    description: "Send SIGTERM to the job's entire process group, escalating to SIGKILL after 3 seconds. " +
+      "Returns current status immediately; use job_wait to confirm termination. Output remains readable. " +
+      "Does nothing if already exited.",
+    inputSchema: { id: jobId },
+    annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
+  }, ({ id }) => jobResult(() => { const job = jobs.get(id); job.kill(); return job.status(); }));
+
+  server.registerTool("job_wait", {
+    title: "Wait for background jobs",
+    description: "Wait for one or more jobs to exit. mode=all (default) waits for all; any waits for at least one, " +
+      "including already completed jobs. Returns ready and a status for every requested id. " +
+      "wait_ms defaults to 30000 (0–30000); ready=false means the wait expired, not that jobs were killed. " +
+      "Does not consume output; use job_output to inspect logs and check exit_code for success.",
+    inputSchema: {
+      ids: z.array(jobId).min(1).max(32),
+      mode: z.enum(["all", "any"]).optional(),
+      wait_ms: z.number().int().min(0).max(30_000).optional(),
+    },
+    annotations: { readOnlyHint: true },
+  }, ({ ids, mode, wait_ms }) => jobResult(() => jobs.wait(ids, mode ?? "all", wait_ms ?? 30_000)));
 
   const shellResult = async (action: () => Promise<ShellSnapshot>): Promise<CallToolResult> => {
     try {
@@ -694,6 +751,7 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
     console.log(`\n${sig} — shutting down`);
     shells.shutdown();
+    jobs.shutdown();
     httpServer.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();
   });
