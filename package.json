@@ -1,0 +1,32 @@
+{
+  "name": "rikkahub-mcp",
+  "version": "1.0.0",
+  "description": "Loopback MCP server exposing a Termux shell (streamable HTTP + legacy SSE)",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "rikkahub-mcp": "dist/server.js"
+  },
+  "scripts": {
+    "test:search": "npm run build && node --enable-source-maps dist/tests/test-search.js",
+    "test:shell": "npm run build && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prestart": "npm run build",
+    "start": "node --enable-source-maps dist/server.js",
+    "pretest": "npm run build",
+    "test": "node --enable-source-maps dist/tests/test-search.js && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js && node --enable-source-maps dist/tests/test-client.js && node --enable-source-maps dist/tests/test-sse-url-token.js",
+    "prepack": "npm run build"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "picomatch": "^4.0.7",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/picomatch": "^4.0.3",
+    "typescript": "~5.9.3"
+  }
+}
