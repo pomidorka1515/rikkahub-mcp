@@ -50,7 +50,7 @@ click on your assistant:
 | `execute` | run confined javascript with `{code}`, `fetch`, and calls to this server's tools |
 | `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); `background: true` returns a job `id` immediately |
 | `job_list` | list retained jobs, their status, original commands, and working directories |
-| `job_output` | consume unread job logs with `{id, lines?}` and return status |
+| `job_output` | read unread job logs with `{id, lines?, peek?}` and return status; `peek: true` does not consume |
 | `job_kill` | stop a job's process group with `{id}` |
 | `job_wait` | wait for one or more jobs with `{ids, mode?, wait_ms?}` |
 | `run_root_command` | same, but as UID 0 via `tsu` (`preserve_env` optional) |
@@ -61,16 +61,16 @@ click on your assistant:
 | `shell_open_root` | check root access, then open a persistent root shell (`cwd`, `env`, `preserve_env` optional) → `shell_id` |
 | `shell_list` | list retained user and root shells, their ids, states, and initial directories |
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
-| `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
+| `shell_read` | read unread output with `{shell_id, lines?, wait_ms?, peek?}`; `peek: true` does not consume |
 | `shell_interrupt` | interrupt the active command with `{shell_id, wait_ms?}`, keeping the shell usable |
-| `read_file` | read numbered text lines, images, pdfs, and binary attachments; optional `max_bytes` |
+| `read_file` | read numbered text lines, images, pdfs, and binary attachments; optional `tail`, `count_only`, `max_bytes` |
 | `edit` | replace exact text with `{path, oldString, newString, replaceAll?}` |
 | `write` | create or fully replace a text file with `{path, content}` |
 | `patch` | apply a multi-file add/update/move/delete diff with `{patchText}` |
 | `write_file` | write/append a text file |
 | `list_dir` | list a directory |
-| `glob` | find files by `pattern`; optional `path`, `hidden`, `limit` |
-| `grep` | search contents by `pattern`; optional `path`, `include`, `literal`, `caseSensitive`, `limit` |
+| `glob` | find files sorted by path using `pattern`; optional `path`, `hidden`, `limit` |
+| `grep` | search contents by `pattern`; optional `path`, `include`, `literal`, `caseSensitive`, `limit`, `before`, `after`, `context` |
 | `webfetch` | fetch an http(s) `url`; optional `format` (markdown, text, html), `timeout` in seconds |
 | `websearch` | search a configured searxng instance by `query`; optional `limit`, `timeout` in seconds |
 
@@ -340,6 +340,15 @@ reports end of file. offsets beyond end of file are errors, except for the
 default read of an empty file. relative paths resolve from the server working
 directory, and `~` is expanded.
 
+`tail: N` returns the last 1–2000 text lines with their original line numbers and
+`total_lines`; it cannot be combined with `offset` or `limit`. `count_only: true`
+returns only `total_lines`, and cannot be combined with pagination or `tail`.
+both scan the whole file with bounded memory and a 30-second scan limit. reads
+stop at the initial file size rather than following appended data; concurrent
+rewrites or truncation are not an atomic snapshot. tail output uses the normal
+line and byte caps, with a continuation offset when needed. line counts include
+an unterminated final line, but not an extra line after a trailing newline.
+
 images (png, jpeg, gif, webp, avif, bmp, tiff, svg, ico) return mcp image blocks.
 pdfs and other binary files return embedded mcp resources containing the original
 file as base64, with a file uri and mime type. common office, archive, audio, and
@@ -353,11 +362,13 @@ attachments. rikkahub must forward these blocks to a compatible model; returning
 a pdf resource does not guarantee that the client can display or interpret it.
 attachments are limited to 32 mib of raw data (before base64), independently of
 `MCP_MAX_OUTPUT_BYTES`. `max_bytes` can lower this limit. oversized attachments
-are rejected, never truncated. omit `offset` and `limit` for non-text files;
+are rejected, never truncated. omit `offset`, `limit`, `tail`, and `count_only` for non-text files;
 line pagination is only available for text.
 
 ```text
 read_file {"path":"~/my-project/src/server.ts","offset":120,"limit":80}
+read_file {"path":"~/my-project/server.log","tail":50}
+read_file {"path":"~/my-project/server.log","count_only":true}
 read_file {"path":"~/pictures/photo.png"}
 read_file {"path":"~/documents/report.pdf"}
 ```
@@ -366,7 +377,7 @@ run `npm run test:read` for isolated reading tests (no running server or root ne
 
 ### File searches
 
-`glob` and `grep` use the same inputs and defaults as OpenCode V2.
+`glob` and `grep` use OpenCode V2-style inputs with additional grep context options.
 both default
 to the server's working directory, return at most 100 results, and time out
 after 30 seconds. paths support `~`. Searches run as the Termux user, not root.
@@ -374,7 +385,11 @@ Ripgrep respects ignore files; hidden entries are excluded unless `glob` gets
 `hidden: true`. `grep` is case-sensitive and regex-based by default; set
 `literal: true` for plain text or `caseSensitive: false` to ignore case.
 results include full paths; grep also includes line numbers and previews.
-output is capped by `MCP_MAX_OUTPUT_BYTES` with a truncation notice
+glob sorts lexicographically by path before applying limits. grep accepts
+`before` (-B), `after` (-A), and `context` (-C), each 0–2000; explicit before/after
+override context on that side. matches use `path:line: text`, surrounding lines
+use `path-line- text`. `limit` counts all result lines, including context.
+output is capped by `MCP_MAX_OUTPUT_BYTES` with a truncation notice.
 
 ```text
 glob {"pattern":"**/*.ts","path":"~/my-project"}
@@ -450,7 +465,10 @@ never exits, so use `job_output` and a health check rather than waiting for comp
   reported in status, not as a tool error.
 * output merges stdout/stderr and consumes up to `lines` (default 100, maximum
   10000), including partial lines. the rolling buffer keeps the most recent
-  `MCP_MAX_OUTPUT_BYTES`; `dropped_bytes` counts overflow since the last output read.
+  `MCP_MAX_OUTPUT_BYTES`; `dropped_bytes` counts overflow since the last consuming read.
+  set `peek: true` to inspect without consuming or resetting the overflow counter.
+  repeated peeks return the same prefix unless new output overflows the buffer
+  or another client consumes it. peek does not recover already consumed output.
 * `job_kill` sends sigterm to the process group and escalates to sigkill after
   3 seconds. it returns immediately; wait to confirm termination, then drain logs.
 * jobs are non-interactive, run as the termux user, and do not share shell state.
@@ -466,6 +484,10 @@ run `npm run test:jobs` for isolated job and transport tests, without root or a
 running server.
 
 ### Persistent shells
+
+`shell_read` also accepts `peek: true`: output stays buffered and `dropped_bytes`
+is not reset. the default remains consuming. `shell_send` and `shell_interrupt`
+still consume their returned output; peek cannot replay those responses.
 
 for builds that should outlive a tool call:
 

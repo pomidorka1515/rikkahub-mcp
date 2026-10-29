@@ -52,8 +52,10 @@ async function readAttachment(file: string, cap: number): Promise<Buffer> {
 }
 
 /** stream lines without retaining arbitrarily large individual lines. */
-async function* textLines(file: string): AsyncGenerator<string> {
-  const stream = fs.createReadStream(file, { encoding: "utf8" });
+async function* textLines(file: string, size: number): AsyncGenerator<string> {
+  if (!size) return;
+  const stream = fs.createReadStream(file, { encoding: "utf8", end: size - 1 });
+  const deadline = Date.now() + 30_000;
   let head = "";
   let length = 0;
   let last = "";
@@ -64,6 +66,7 @@ async function* textLines(file: string): AsyncGenerator<string> {
   };
   try {
     for await (const chunk of stream) {
+      if (Date.now() > deadline) throw new Error("text scan timed out after 30 seconds; narrow the read or search");
       for (const char of String(chunk)) {
         if (char === "\0") throw new Error("binary data detected beyond the file type probe; cannot read this file as text");
         if (char === "\n") {
@@ -88,6 +91,7 @@ export function registerReadTool(server: McpServer, maxOutputBytes: number, cont
   server.registerTool("read_file", {
     title: "Read file",
     description: "Read text, images, PDFs and other files. Text uses 1-based line numbers; use offset and limit to page through text. " +
+      "tail returns the last N text lines; count_only returns only the total line count. Both scan the file (30 second limit), not follow it. " +
       "Defaults to at most 2000 lines and 50 KiB per page; lines longer than 2000 characters are shortened. " +
       "Images return MCP image blocks; PDFs and other binary files return embedded resource blobs (client support required). " +
       "Call directly, not through execute, to receive attachments. Attachments are limited to 32 MiB and cannot be paginated. " +
@@ -97,11 +101,15 @@ export function registerReadTool(server: McpServer, maxOutputBytes: number, cont
       path: z.string().describe("File path, absolute or relative to the selected project (otherwise server working directory); ~ is expanded"),
       offset: z.number().int().min(1).optional().describe("First line to read, 1-based (default 1)"),
       limit: z.number().int().min(1).max(MAX_LINES).optional().describe("Maximum lines to return (default 2000)"),
+      tail: z.number().int().min(1).max(MAX_LINES).optional().describe("Return the last N text lines with original line numbers; cannot combine with offset or limit."),
+      count_only: z.boolean().optional().describe("Return only the text line count; cannot combine with offset, limit or tail."),
       max_bytes: z.number().int().positive().optional().describe("Optional lower text page or attachment byte cap (raw bytes, before base64)"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ path: input, offset, limit, max_bytes, project_id }): Promise<CallToolResult> => {
+  }, async ({ path: input, offset, limit, max_bytes, project_id, tail, count_only }): Promise<CallToolResult> => {
     try {
+      if (tail !== undefined && (offset !== undefined || limit !== undefined)) throw new Error("tail cannot be combined with offset or limit");
+      if (count_only && (offset !== undefined || limit !== undefined || tail !== undefined)) throw new Error("count_only cannot be combined with offset, limit or tail");
       const file = context.resolve(input, project_id);
       const stat = await fsp.stat(file);
       if (!stat.isFile()) throw new Error("path is not a regular file");
@@ -123,7 +131,7 @@ export function registerReadTool(server: McpServer, maxOutputBytes: number, cont
       }
       const mimeType = attachmentType(head, file);
       if (mimeType) {
-        if (offset !== undefined || limit !== undefined) throw new Error("offset and limit are only supported for text files; omit them to read an attachment");
+        if (offset !== undefined || limit !== undefined || tail !== undefined || count_only) throw new Error("offset, limit, tail and count_only are only supported for text files; omit them to read an attachment");
         const cap = Math.min(max_bytes ?? MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_BYTES);
         if (stat.size > cap) throw new Error(`attachment exceeds ${cap} byte limit; attachments cannot be paginated`);
         const data = (await readAttachment(file, cap)).toString("base64");
@@ -138,7 +146,23 @@ export function registerReadTool(server: McpServer, maxOutputBytes: number, cont
       let bytes = 0;
       let line = 0;
       let next: number | undefined;
-      for await (const text of textLines(file)) {
+      let source: AsyncIterable<string> = textLines(file, stat.size);
+      let total: number | undefined;
+      if (tail !== undefined || count_only) {
+        const retained: string[] = [];
+        total = 0;
+        for await (const text of source) {
+          if (tail !== undefined) retained[total % tail] = text;
+          total++;
+        }
+        if (count_only) return { content: [{ type: "text", text: `${file}\n[total_lines=${total}]` }] };
+        const length = Math.min(total, tail!);
+        line = total - length;
+        source = (async function* () {
+          for (let i = 0; i < length; i++) yield retained[(total! - length + i) % tail!]!;
+        })();
+      }
+      for await (const text of source) {
         line++;
         if (line < offset) continue;
         const row = `${line}: ${text}`;
@@ -159,7 +183,7 @@ export function registerReadTool(server: McpServer, maxOutputBytes: number, cont
         throw new Error(`offset ${offset} is beyond end of file (${line} lines)`);
       }
       const footer = next === undefined ? "[end of file]" : `[page truncated; continue with offset=${next}]`;
-      return { content: [{ type: "text", text: `${file}\n${rows.join("\n")}\n${footer}` }] };
+      return { content: [{ type: "text", text: `${file}\n${rows.join("\n")}\n${footer}${total === undefined ? "" : `\n[total_lines=${total}]`}` }] };
     } catch (error) {
       return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
     }

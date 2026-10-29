@@ -10,6 +10,10 @@ try {
   const finished = await jobs.wait([first.id], "all", 5000);
   assert.equal(finished.ready, true);
   assert.equal(finished.jobs[0]!.exit_code, 7);
+  const peek = jobs.get(first.id).read(1, true);
+  assert.equal(peek.output, "hello\n");
+  assert.equal(peek.buffered_bytes, Buffer.byteLength("hello\nerror\n"));
+  assert.equal(jobs.get(first.id).read(1, true).output, peek.output);
   assert.equal(jobs.get(first.id).read(1).output, "hello\n");
   assert.equal(jobs.get(first.id).read(1).output, "error\n");
   assert.equal(jobs.get(first.id).read(100).output, "");
@@ -32,6 +36,8 @@ try {
 
   const overflow = await jobs.start("printf '🙂%.0s' {1..100}", cwd);
   await jobs.wait([overflow.id], "all", 5000);
+  assert.equal(jobs.get(overflow.id).read(100, true).dropped_bytes, 272);
+  assert.equal(jobs.get(overflow.id).read(100, true).dropped_bytes, 272);
   const output = jobs.get(overflow.id).read(100);
   assert.equal(output.output, "🙂".repeat(32));
   assert.equal(output.dropped_bytes, 272);

@@ -67,7 +67,7 @@ export function registerSearchTools(server: McpServer, maxBytes: number, context
   const resultLimit = z.number().int().positive().optional();
   server.registerTool("glob", {
     title: "Glob",
-    description: 'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx").',
+    description: 'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx"). Results are sorted lexicographically by path before applying limits.',
     inputSchema: {
       project_id: projectIdSchema,
       hidden: z.boolean().optional().describe("Include hidden files and directories (default: false)."),
@@ -81,7 +81,7 @@ export function registerSearchTools(server: McpServer, maxBytes: number, context
       const root = context.resolve(dir, project_id);
       if (!(await stat(root)).isDirectory()) throw new Error(`Not a directory: ${root}`);
       const matches = picomatch(pattern, { dot: hidden ?? false, basename: !pattern.includes("/") });
-      return await search(["--files", "--null", ...(hidden ? ["--hidden"] : []), "--", root],
+      return await search(["--files", "--null", "--sort", "path", ...(hidden ? ["--hidden"] : []), "--", root],
         "\0", limit ?? 100, maxBytes, (file) => matches(path.relative(root, file)) ? file : undefined);
     } catch (error) {
       return { content: [{ type: "text", text: String(error) }], isError: true };
@@ -91,31 +91,36 @@ export function registerSearchTools(server: McpServer, maxBytes: number, context
     title: "Grep",
     description: "Search file contents using ripgrep's regular expression syntax or literal text matching. " +
       "Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. " +
-      "Returns matching file paths, line numbers, and line previews.",
+      "Returns matching file paths, line numbers, and line previews. Optional before/after/context add surrounding lines (marked with - instead of :). Limits count all returned lines, including context.",
     inputSchema: {
       project_id: projectIdSchema,
       caseSensitive: z.boolean().optional().describe("Use case-sensitive matching (default: true)."),
       include: z.string().optional().describe('Glob pattern to filter files (for example, "*.js" or "*.{ts,tsx}")'),
-      limit: resultLimit.describe("Maximum number of matching lines to return (default: 100)"),
+      limit: resultLimit.describe("Maximum number of result lines, including context (default: 100)"),
+      before: z.number().int().min(0).max(2000).optional().describe("Lines before each match (-B); overrides context for this side."),
+      after: z.number().int().min(0).max(2000).optional().describe("Lines after each match (-A); overrides context for this side."),
+      context: z.number().int().min(0).max(2000).optional().describe("Lines before and after each match (-C; default 0)."),
       literal: z.boolean().optional().describe("Treat `pattern` as exact text instead of a regular expression (default: false)."),
       path: z.string().optional().describe("File or directory to search. Defaults to the current working directory."),
       pattern: z.string().min(1).describe("Regular expression or literal text to match in file contents."),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ caseSensitive, include, limit, literal, path: dir, pattern, project_id }) => {
+  }, async ({ caseSensitive, include, limit, literal, path: dir, pattern, project_id, before, after, context: surrounding }) => {
     try {
       const root = context.resolve(dir, project_id);
       const info = await stat(root);
       if (!info.isFile() && !info.isDirectory()) throw new Error(`Not a file or directory: ${root}`);
       return await search(["--json", "--color", "never", caseSensitive === false ? "--ignore-case" : "--case-sensitive",
+        "--before-context", String(before ?? surrounding ?? 0), "--after-context", String(after ?? surrounding ?? 0),
         ...(literal ? ["--fixed-strings"] : []), ...(include === undefined ? [] : ["--type-add", `mcpinclude:${include}`, "--type", "mcpinclude"]), "--", pattern, root],
       "\n", limit ?? 100, maxBytes, (record) => {
         const event = JSON.parse(record);
-        if (event.type !== "match") return undefined;
+        if (event.type !== "match" && event.type !== "context") return undefined;
         const decode = (field: { text?: string; bytes?: string }): string =>
           field.text ?? Buffer.from(field.bytes ?? "", "base64").toString("utf8");
         const preview = decode(event.data.lines).replace(/\r?\n$/, "");
-        return `${decode(event.data.path)}:${event.data.line_number}: ${preview.slice(0, 2000)}${preview.length > 2000 ? "…" : ""}`;
+        const separator = event.type === "match" ? ":" : "-";
+        return `${decode(event.data.path)}${separator}${event.data.line_number}${separator} ${preview.slice(0, 2000)}${preview.length > 2000 ? "…" : ""}`;
       });
     } catch (error) {
       return { content: [{ type: "text", text: String(error) }], isError: true };

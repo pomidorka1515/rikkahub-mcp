@@ -386,14 +386,16 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   }, async () => ({ content: [{ type: "text", text: recoverableText(JSON.stringify({ jobs: jobs.list() }), MAX_OUTPUT_BYTES) }] }));
   server.registerTool("job_output", {
     title: "Read background job output",
-    description: "Consume unread merged stdout/stderr, including partial lines, and return job status. " +
+    description: "Read unread merged stdout/stderr, including partial lines, and return job status. " +
+      "Set peek=true to inspect without consuming output or resetting dropped_bytes; default false consumes. " +
       "Defaults to 100 lines, maximum 10000. The rolling buffer retains MCP_MAX_OUTPUT_BYTES; " +
       "dropped_bytes reports overflow since the last read. Large transcripts provide output_path for recovery; " +
       "output_capture_error means capture is incomplete. Jobs survive reconnects, not server restarts. " +
       "At most 32 jobs are retained; the oldest completed job is evicted when space is needed.",
-    inputSchema: { id: jobId, lines: z.number().int().min(1).max(10_000).optional() },
+    inputSchema: { id: jobId, lines: z.number().int().min(1).max(10_000).optional(),
+      peek: z.boolean().optional().describe("Inspect without consuming output (default false); older output can still overflow the rolling buffer.") },
     annotations: { readOnlyHint: false, destructiveHint: false },
-  }, ({ id, lines }) => jobResult(() => jobs.get(id).read(lines ?? 100)));
+  }, ({ id, lines, peek }) => jobResult(() => jobs.get(id).read(lines ?? 100, peek)));
 
   server.registerTool("job_kill", {
     title: "Stop background job",
@@ -481,16 +483,18 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
 
   server.registerTool("shell_read", {
     title: "Read shell output",
-    description: "Consume up to lines (default 100) of unread merged stdout/stderr, including partial lines. " +
+    description: "Read up to lines (default 100) of unread merged stdout/stderr, including partial lines. " +
+      "Set peek=true to inspect without consuming output or resetting dropped_bytes; default false consumes. " +
       "wait_ms defaults to 0; when empty, optionally wait for output or command completion. " +
       "state=idle means the last command finished; exit_code is its status. " +
       "The buffer keeps the most recent output up to MCP_MAX_OUTPUT_BYTES; dropped_bytes reports overflow. " +
       "Large lifetime transcripts provide output_path for recovery; output_capture_error means capture is incomplete.",
     inputSchema: {
       shell_id: shellId, lines: z.number().int().min(1).max(10_000).optional(), wait_ms: waitMs,
+      peek: z.boolean().optional().describe("Inspect without consuming output (default false); older output can still overflow the rolling buffer."),
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
-  }, ({ shell_id, lines, wait_ms }) => shellResult(() => shells.get(shell_id).read(lines ?? 100, wait_ms ?? 0)));
+  }, ({ shell_id, lines, wait_ms, peek }) => shellResult(() => shells.get(shell_id).read(lines ?? 100, wait_ms ?? 0, peek)));
 
   server.registerTool("shell_interrupt", {
     title: "Interrupt shell command",

@@ -130,7 +130,11 @@ try {
     code: `JSON.parse((await tools.job_wait({ids:[${JSON.stringify(job.id)}],wait_ms:0})).content[0].text).ready`,
   }));
   assert.equal(viaExecute, false);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(json(await call("job_output", { id: job.id, lines: 1, peek: true })).output, "ready\n");
+  }
   assert.equal(json(await call("job_output", { id: job.id, lines: 1 })).output, "ready\n");
+  assert.equal(json(await call("job_output", { id: job.id, peek: true })).output, "");
   assert.ok((await call("job_output", { id: "missing" })).isError);
   assert.ok((await call("job_wait", { ids: [] })).isError);
   assert.ok((await call("job_wait", { ids: [job.id], wait_ms: 30001 })).isError);
@@ -142,6 +146,15 @@ try {
   assert.ok((await call("shell_send", { shell_id: shell.shell_id, cmd: "echo busy" })).isError);
   assert.equal(snapshot(await call("shell_interrupt", { shell_id: shell.shell_id })).state, "idle");
   assert.ok((await call("shell_read", { shell_id: "missing" })).isError);
+  const manyLines = "printf 'line\\n%.0s' {1..103}";
+  const preview = snapshot(await call("shell_send", { shell_id: shell.shell_id, cmd: manyLines, wait_ms: 1000 }));
+  assert.equal(preview.output, "line\n".repeat(100));
+  for (let i = 0; i < 2; i++) {
+    const peek = snapshot(await call("shell_read", { shell_id: shell.shell_id, lines: 1, peek: true }));
+    assert.equal(peek.output, "line\n");
+    assert.equal(peek.buffered_bytes, 15);
+  }
+  assert.equal(snapshot(await call("shell_read", { shell_id: shell.shell_id })).output, "line\n".repeat(3));
 
   const sse = new Client({ name: "shell-sse-test", version: "1" });
   clients.push(sse);

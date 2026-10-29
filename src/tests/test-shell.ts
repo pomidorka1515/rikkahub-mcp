@@ -87,6 +87,10 @@ try {
   const info = manager.list().find((item) => item.shell_id === first.shell_id)!;
   assert.equal(info.buffered_bytes, Buffer.byteLength("one\ntwo\nthree"));
   assert.equal(info.initial_cwd, os.homedir());
+  const peek = await shell.read(1, 0, true);
+  assert.equal(peek.output, "one\n");
+  assert.equal(peek.buffered_bytes, info.buffered_bytes);
+  assert.equal((await shell.read(1, 0, true)).output, "one\n");
   assert.equal((await shell.read(1, 0)).output, "one\n");
   assert.equal((await shell.read(1, 0)).output, "two\n");
   assert.equal((await shell.read(1, 0)).output, "three");

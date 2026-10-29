@@ -80,16 +80,16 @@ class Job {
       buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: this.dropped, ...this.capture.metadata() };
   }
 
-  read(lines: number): JobStatus & { output: string } {
+  read(lines: number, peek = false): JobStatus & { output: string } {
     let end = 0;
     for (let count = 0; count < lines && end < this.output.length; count++) {
       const newline = this.output.indexOf("\n", end);
       end = newline === -1 ? this.output.length : newline + 1;
     }
     const output = this.output.slice(0, end);
-    this.output = this.output.slice(end);
+    if (!peek) this.output = this.output.slice(end);
     const status = this.status();
-    this.dropped = 0;
+    if (!peek) this.dropped = 0;
     return { ...status, output };
   }
 

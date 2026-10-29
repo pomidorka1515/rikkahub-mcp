@@ -39,6 +39,7 @@ try {
   assert.ok(files.includes("a: spaced.ts"));
   assert.ok(!files.includes("secret.ts"));
   assert.ok(!files.includes("ignored.ts"));
+  assert.deepEqual(files.split("\n"), files.split("\n").sort());
   assert.ok((await call("glob", { pattern: "**/*.ts", hidden: true })).includes("secret.ts"));
   assert.ok(!(await call("glob", { pattern: "**/*.ts", hidden: true })).includes("ignored.ts"));
   assert.match(await call("glob", { pattern: "**/*.ts", limit: 1 }), /Results truncated/);
@@ -54,6 +55,19 @@ try {
   assert.ok(!literal.includes("aXb"));
   assert.match(await call("grep", { pattern: "a.b" }), /aXb/);
   assert.match(await call("grep", { pattern: "雪☃" }), /a\.ts:5: 雪☃/);
+  const contextual = await call("grep", { pattern: "a.b", literal: true, context: 1 });
+  assert.match(contextual, /a\.ts-2- needle/);
+  assert.match(contextual, /a\.ts:3: a\.b/);
+  assert.match(contextual, /a\.ts-4- aXb/);
+  assert.ok(!contextual.includes("a.ts-5-"));
+  const before = await call("grep", { pattern: "a.b", literal: true, before: 2 });
+  assert.match(before, /a\.ts-1- Needle/);
+  assert.ok(!before.includes("a.ts-4-"));
+  const after = await call("grep", { pattern: "a.b", literal: true, context: 2, before: 0 });
+  assert.ok(!after.includes("a.ts-2-"));
+  assert.match(after, /a\.ts-5- 雪☃/);
+  assert.match(await call("grep", { pattern: "a.b", literal: true, context: 2, limit: 2 }), /Results truncated/);
+  await call("grep", { pattern: "x", context: -1 }, true);
   assert.match(await call("grep", { pattern: "Needle", path: path.join(root, "src", "a.ts") }), /a\.ts:1:/);
   assert.match(await call("grep", { pattern: "Needle", limit: 1 }), /Results truncated/);
   assert.equal(await call("grep", { pattern: "no-such-match" }), "No matches found.");

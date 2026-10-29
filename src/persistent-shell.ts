@@ -145,9 +145,9 @@ class PersistentShell {
     return this.snapshot(100);
   }
 
-  async read(lines: number, waitMs: number): Promise<ShellSnapshot> {
+  async read(lines: number, waitMs: number, peek = false): Promise<ShellSnapshot> {
     await this.wait(waitMs, true);
-    return this.snapshot(lines);
+    return this.snapshot(lines, peek);
   }
 
   async interrupt(waitMs: number): Promise<ShellSnapshot> {
@@ -178,16 +178,16 @@ class PersistentShell {
     });
   }
 
-  private snapshot(lines: number): ShellSnapshot {
+  private snapshot(lines: number, peek = false): ShellSnapshot {
     let end = 0;
     for (let count = 0; count < lines && end < this.output.length; count++) {
       const newline = this.output.indexOf("\n", end);
       end = newline === -1 ? this.output.length : newline + 1;
     }
     const output = this.output.slice(0, end);
-    this.output = this.output.slice(end);
+    if (!peek) this.output = this.output.slice(end);
     const dropped = this.dropped;
-    this.dropped = 0;
+    if (!peek) this.dropped = 0;
     return { shell_id: this.id, state: this.state, exit_code: this.exitCode,
       signal: this.signal, output, buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: dropped, ...this.capture.metadata() };
   }
