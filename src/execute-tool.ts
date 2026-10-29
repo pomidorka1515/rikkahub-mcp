@@ -76,10 +76,8 @@ export async function registerExecuteTool(
       "Set project_id to default nested file/search/command calls to that project; individual nested calls may override it. " +
       "project_open returns a handle but does not change the context of this execution; use its id explicitly or in a later execute call. " +
       "The final value is available as structuredContent.result; oversized results use truncated and recovery metadata instead. " +
-      "Available tools (exact names and JSON input/output schemas):\n" +
-      catalog.filter(tool => tool.name !== "execute").map(tool => JSON.stringify({
-        name: tool.name, description: tool.description, inputSchema: tool.inputSchema, outputSchema: tool.outputSchema,
-      })).join("\n"),
+      "Use each tool's separately advertised description and input/output schemas for nested calls. " +
+      "Available calls: " + names.map(name => `tools.${name}(input)`).join(", ") + ".",
     inputSchema: { project_id: projectIdSchema, code: z.string().min(1).max(256 * 1024).describe("JavaScript source; top-level await and return are supported.") },
     outputSchema: boundedOutputSchema({ result: z.unknown() }),
     annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },

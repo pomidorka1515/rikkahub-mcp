@@ -200,8 +200,10 @@ run `npm run test:device` for isolated tests; they do not activate device hardwa
 `execute` runs javascript in a fresh quickjs wasm runtime on a worker thread.
 use an explicit `return`, or the final top-level expression becomes the result.
 top-level `await` is supported; imports, node globals, direct filesystem/shell
-access, and timers are not. the tool description contains the exact callable
-tool names and input schemas. no opencode tools are involved.
+access, and timers are not. the tool description lists the exact callable
+tool names; use each tool's separately advertised description and input/output
+schemas for nested calls. these schemas are not duplicated in `execute`.
+no opencode tools are involved.
 
 ```javascript
 const results = await Promise.allSettled([

@@ -35,6 +35,14 @@ const url = `http://127.0.0.1:${address.port}`;
 try {
   await server.connect(a);
   await client.connect(b);
+  const advertised = (await client.listTools()).tools;
+  const execute = advertised.find(tool => tool.name === "execute");
+  assert.ok(execute);
+  assert.match(execute.description ?? "", /tools\.echo\(input\)/);
+  assert.match(execute.description ?? "", /tools\.fail\(input\)/);
+  assert.doesNotMatch(execute.description ?? "", /inputSchema|outputSchema|"properties"|tools\.execute\(input\)/);
+  assert.deepEqual(Object.keys(execute.inputSchema.properties ?? {}).sort(), ["code", "project_id"]);
+  assert.ok(advertised.find(tool => tool.name === "echo")?.inputSchema.properties?.value);
   const call = async (code: string, error = false): Promise<string> => {
     const result = CallToolResultSchema.parse(await client.callTool({ name: "execute", arguments: { code } }));
     const text = result.content.map(item => item.type === "text" ? item.text : "").join("\n");
