@@ -53,12 +53,14 @@ click on your assistant:
 | `job_wait` | wait for one or more jobs with `{ids, mode?, wait_ms?}` |
 | `run_root_command` | same, but as UID 0 via `tsu` (`preserve_env` optional) |
 | `screenshot` | capture the current phone display as a native-resolution png image; requires root via `tsu` |
+| `vibrate` | vibrate without root with `{duration_seconds}`; requires termux:api |
+| `flashlight` | turn on without root with `{duration_seconds?}` or off with `{enabled:false}`; requires termux:api |
 | `shell_open` | open a persistent user shell (`cwd`, `env` optional) → `shell_id` |
 | `shell_open_root` | check root access, then open a persistent root shell (`cwd`, `env`, `preserve_env` optional) → `shell_id` |
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
 | `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
 | `shell_interrupt` | interrupt the active command with `{shell_id, wait_ms?}`, keeping the shell usable |
-| `read_file` | read numbered text lines with optional `offset`, `limit`, and `max_bytes` |
+| `read_file` | read numbered text lines, images, pdfs, and binary attachments; optional `max_bytes` |
 | `edit` | replace exact text with `{path, oldString, newString, replaceAll?}` |
 | `write` | create or fully replace a text file with `{path, content}` |
 | `patch` | apply a multi-file add/update/move/delete diff with `{patchText}` |
@@ -142,6 +144,30 @@ stays in memory, with no resizing or saved file (10-second capture timeout,
 client receives an mcp image block. rikkahub must forward tool-result images to
 a vision-capable model. the image shows whatever is currently visible, including
 sensitive notifications; protected screens may appear blank.
+
+### vibration and flashlight
+
+both tools run as the termux user, without root. install the command package
+with `pkg install termux-api` and the compatible termux:api android companion app
+from the same source/signing family as termux; grant its requested permissions.
+missing dependencies, denied permissions, and command timeouts return tool errors.
+
+```text
+vibrate {"duration_seconds":0.5}
+flashlight {"duration_seconds":10}
+flashlight {}
+flashlight {"enabled":false}
+```
+
+durations accept fractional seconds from 0.001 to 3600. vibration strength is
+not exposed by termux:api, and silent mode may suppress vibration. flashlight
+calls return immediately after the command succeeds; the optional timer turns
+it off later. a successful flashlight call replaces the previous timer, shared
+across clients. omitted duration keeps it on until explicitly turned off.
+auto-off timers do not survive server shutdowns or crashes; turn the light off
+manually if needed. refresh the client's tool list after restarting the server.
+
+run `npm run test:device` for isolated tests; they do not activate device hardware.
 
 ### javascript execution
 
@@ -303,11 +329,28 @@ with a notice; shortened text is not recoverable through line pagination.
 when a page is full, the response provides the next `offset`; otherwise it
 reports end of file. offsets beyond end of file are errors, except for the
 default read of an empty file. relative paths resolve from the server working
-directory, and `~` is expanded. binary files containing null bytes are rejected;
-image and PDF reading are not supported.
+directory, and `~` is expanded.
+
+images (png, jpeg, gif, webp, avif, bmp, tiff, svg, ico) return mcp image blocks.
+pdfs and other binary files return embedded mcp resources containing the original
+file as base64, with a file uri and mime type. common office, archive, audio, and
+video extensions are recognized; otherwise binary data detected in the first
+4 kib uses `application/octet-stream`. png, jpeg, gif, webp, and pdf signatures
+are recognized even without a matching extension. files are not converted,
+rendered, or text-extracted; format support depends on the client and model.
+
+call `read_file` directly, not through `execute`, to receive images and resource
+attachments. rikkahub must forward these blocks to a compatible model; returning
+a pdf resource does not guarantee that the client can display or interpret it.
+attachments are limited to 32 mib of raw data (before base64), independently of
+`MCP_MAX_OUTPUT_BYTES`. `max_bytes` can lower this limit. oversized attachments
+are rejected, never truncated. omit `offset` and `limit` for non-text files;
+line pagination is only available for text.
 
 ```text
 read_file {"path":"~/my-project/src/server.ts","offset":120,"limit":80}
+read_file {"path":"~/pictures/photo.png"}
+read_file {"path":"~/documents/report.pdf"}
 ```
 
 run `npm run test:read` for isolated reading tests (no running server or root needed).

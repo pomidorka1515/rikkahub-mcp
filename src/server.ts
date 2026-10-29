@@ -21,6 +21,7 @@ import { JobManager } from "./jobs.js";
 import { registerExecuteTool } from "./execute-tool.js";
 import { requireRootAccess } from "./root-access.js";
 import { registerScreenshotTool } from "./screenshot-tool.js";
+import { registerDeviceTools } from "./device-tools.js";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
 import { ProjectContext, projectIdSchema, registerProjectTools } from "./projects.js";
 import { OutputCapture } from "./output-store.js";
@@ -533,6 +534,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   registerProjectTools(server, MAX_OUTPUT_BYTES, context);
   registerReadTool(server, MAX_OUTPUT_BYTES, context);
   registerScreenshotTool(server);
+  registerDeviceTools(server);
 
   registerEditTools(server, context);
 
