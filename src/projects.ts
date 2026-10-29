@@ -7,6 +7,7 @@ import { TextDecoder } from "node:util";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { recoverableText } from "./output-store.js";
 
 export const projectIdSchema = z.string().min(1).optional().describe(
   "Project id returned by project_open in this chat. Relative paths and default directories use that project. No shared active project.",
@@ -95,6 +96,14 @@ export function registerProjectTools(server: McpServer, maxBytes: number, contex
     roots.set(id, root);
     return text;
   }));
+  server.registerTool("project_list", {
+    title: "List project handles",
+    description: "List all retained project handles and canonical paths across clients, including duplicate paths. " +
+      "Handles survive reconnects but not server restarts. Does not select a project or reload instructions; use project_info for that. " +
+      "Large results may be truncated with output_path for recovery.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, () => result(async () => recoverableText(JSON.stringify({ projects: [...roots].map(([project_id, path]) => ({ project_id, path })) }), maxBytes)));
   server.registerTool("project_info", {
     title: "Read project context",
     description: "Return the project directory and reload both root instruction files. Use after context loss or instruction changes.",

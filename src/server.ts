@@ -24,7 +24,7 @@ import { registerScreenshotTool } from "./screenshot-tool.js";
 import { registerDeviceTools } from "./device-tools.js";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
 import { ProjectContext, projectIdSchema, registerProjectTools } from "./projects.js";
-import { OutputCapture } from "./output-store.js";
+import { OutputCapture, recoverableText } from "./output-store.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -308,15 +308,15 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
         `${os.userInfo().username}, home ${os.homedir()}). ` +
         "Shared storage is at ~/storage/shared or /sdcard. Commands run in bash, " +
         "non-interactively. Use run_command with background=true for app servers and background tasks; " +
-        "save the job id, inspect job_output, wait for completion with job_wait, and stop with job_kill. " +
+        "save the job id, inspect job_output, wait for completion with job_wait, and stop with job_kill. Use job_list to recover ids. " +
         "Use shell_open/send/read/interrupt (shell_open_root for checked root access) " +
-         "for persistent shells and long builds. Save shell_id; check state and exit_code before assuming success. " +
+         "for persistent shells and long builds. Save shell_id or recover it with shell_list; check state and exit_code before assuming success. " +
          "Read files before editing. Prefer edit for exact replacements, patch for multi-file diffs (add/update/move/delete), " +
           "and write for new files or full replacements; do not use shell commands to edit files when these tools suffice. " +
           "Before working on a project, call project_open with its directory and follow the returned AGENTS.md and CLAUDE.md " +
           "as project guidance, subject to higher-priority instructions. Save project_id in this chat and pass it to project tools " +
           "or execute; there is no shared active project. When switching, stop applying the previous project's instructions. " +
-           "Use project_info to reload instructions after context loss or changes. " +
+            "Use project_list to recover handles and project_info to reload instructions after context loss or changes. " +
            "Truncated command/web/execute output and large job/shell transcripts provide output_path for recovery with read_file or grep. " +
            "Check output_capture_error or capture warnings: disk retention is bounded and saved output may be incomplete.",
     },
@@ -376,6 +376,14 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     }
   };
   const jobId = z.string().min(1).describe("id returned by run_command with background=true");
+  server.registerTool("job_list", {
+    title: "List background jobs",
+    description: "List all retained jobs across clients, including running and exited jobs, with ids, status, original command and cwd. " +
+      "Does not consume output. Jobs survive reconnects, not server restarts; completed jobs can be evicted when space is needed. " +
+      "Large results may be truncated with output_path for recovery.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, async () => ({ content: [{ type: "text", text: recoverableText(JSON.stringify({ jobs: jobs.list() }), MAX_OUTPUT_BYTES) }] }));
   server.registerTool("job_output", {
     title: "Read background job output",
     description: "Consume unread merged stdout/stderr, including partial lines, and return job status. " +
@@ -420,6 +428,16 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   const shellId = z.string().min(1).describe("shell_id returned by shell_open or shell_open_root");
   const waitMs = z.number().int().min(0).max(30_000).optional()
     .describe("Wait up to this many milliseconds, at most 30000. Does not kill the command.");
+
+  server.registerTool("shell_list", {
+    title: "List persistent shells",
+    description: "List all retained user and root shells across clients, including idle, running and exited shells, with ids and state. " +
+      "initial_cwd is the requested starting directory, not the current directory; null means the root shell's default home. " +
+      "Does not consume output. Shells survive reconnects, not server restarts; exited shells can be evicted when space is needed. " +
+      "Large results may be truncated with output_path for recovery.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  }, async () => ({ content: [{ type: "text", text: recoverableText(JSON.stringify({ shells: shells.list() }), MAX_OUTPUT_BYTES) }] }));
 
   server.registerTool("shell_open", {
     title: "Open persistent shell",

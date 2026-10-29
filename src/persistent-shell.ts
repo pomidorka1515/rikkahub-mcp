@@ -33,8 +33,9 @@ class PersistentShell {
   private dropped = 0;
   private capture: OutputCapture;
 
-  constructor(shell: string, cwd: string | undefined, env: Record<string, string>, private maxBytes: number,
+  constructor(shell: string, readonly initialCwd: string | undefined, env: Record<string, string>, private maxBytes: number,
     private rootMode?: RootMode) {
+    const cwd = initialCwd;
     this.capture = new OutputCapture(maxBytes);
     // A trapped INT keeps the shell alive; external foreground commands reset
     // the trap and receive SIGINT along with the rest of this process group.
@@ -124,6 +125,12 @@ class PersistentShell {
     this.dropped += start;
     this.output = bytes.subarray(start).toString("utf8");
     this.events.emit("change");
+  }
+
+  info(): { shell_id: string; state: ShellSnapshot["state"]; exit_code: number | null; signal: NodeJS.Signals | null; root: boolean; initial_cwd: string | null; buffered_bytes: number; dropped_bytes: number } {
+    return { shell_id: this.id, state: this.state, exit_code: this.exitCode, signal: this.signal,
+      root: this.rootMode !== undefined, initial_cwd: this.initialCwd ?? null,
+      buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: this.dropped };
   }
 
   async send(cmd: string, waitMs: number): Promise<ShellSnapshot> {
@@ -238,6 +245,10 @@ export class ShellManager {
     const shell = this.shells.get(id);
     if (!shell) throw new Error(`Unknown shell_id: ${id}`);
     return shell;
+  }
+
+  list(): ReturnType<PersistentShell["info"]>[] {
+    return [...this.shells.values()].map((shell) => shell.info());
   }
 
   shutdown(): void {

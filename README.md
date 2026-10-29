@@ -44,10 +44,12 @@ click on your assistant:
 | tool | does |
 |---|---|
 | `project_open` | select a directory for this chat; return a `project_id` and both root `AGENTS.md` and `CLAUDE.md` contents |
+| `project_list` | list retained project ids and canonical paths across clients |
 | `project_info` | reload a project's directory and instruction files using its `project_id` |
 | `project_close` | release a project handle without deleting files or stopping jobs/shells |
 | `execute` | run confined javascript with `{code}`, `fetch`, and calls to this server's tools |
 | `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); `background: true` returns a job `id` immediately |
+| `job_list` | list retained jobs, their status, original commands, and working directories |
 | `job_output` | consume unread job logs with `{id, lines?}` and return status |
 | `job_kill` | stop a job's process group with `{id}` |
 | `job_wait` | wait for one or more jobs with `{ids, mode?, wait_ms?}` |
@@ -57,6 +59,7 @@ click on your assistant:
 | `flashlight` | turn on without root with `{duration_seconds?}` or off with `{enabled:false}`; requires termux:api |
 | `shell_open` | open a persistent user shell (`cwd`, `env` optional) → `shell_id` |
 | `shell_open_root` | check root access, then open a persistent root shell (`cwd`, `env`, `preserve_env` optional) → `shell_id` |
+| `shell_list` | list retained user and root shells, their ids, states, and initial directories |
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
 | `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
 | `shell_interrupt` | interrupt the active command with `{shell_id, wait_ms?}`, keeping the shell usable |
@@ -72,6 +75,9 @@ click on your assistant:
 | `websearch` | search a configured searxng instance by `query`; optional `limit`, `timeout` in seconds |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+the three list tools are server-wide, not scoped to a chat; any client with the
+token can see all retained handles and job commands. oversized list results may
+be truncated with an `output_path` for recovery.
 
 ### projects
 
@@ -112,6 +118,9 @@ with the server token can access the same files. existing shells keep their own
 working directories, and existing jobs are not moved or stopped when switching.
 handles survive reconnects but expire on server restart. up to 256 handles are
 retained; release unused ones with `project_close`.
+`project_list {}` returns all retained handles and paths, including duplicate
+paths, across clients. use `project_info` on a recovered id to reload instructions;
+listing does not select a project or return its instructions.
 
 instruction contents are returned as tool-result context, **not injected into
 the client's system prompt**. the server advertises the project workflow in
@@ -450,6 +459,8 @@ never exits, so use `job_output` and a health check rather than waiting for comp
   the same token grants access to every job. shutdown kills running jobs; restarts
   lose ids and logs. at most 32 jobs are retained; when full, starting a new job
   evicts the oldest completed job, or fails if all are running.
+* `job_list {}` returns `{jobs: [...]}` for all retained jobs, including exited
+  jobs, with status, the original `command` and `cwd`. it does not consume logs.
 
 run `npm run test:jobs` for isolated job and transport tests, without root or a
 running server.
@@ -486,6 +497,10 @@ root and user shells share the 16-shell limit and the same
 * `cd`, exports and functions persist within each shell. multiple shells are
   independent; at most 16 are retained. exited shells remain readable until
   capacity is needed for a new shell.
+* `shell_list {}` returns `{shells: [...]}` for all retained shells, including
+  exited shells, without consuming output. `root` identifies root shells and
+  `initial_cwd` is the requested starting directory, not the current directory;
+  null means the root shell's default home.
 * every successful call returns JSON with `shell_id`, `state` (`idle`, `running`,
   `exited`), `exit_code`, `signal`, `output`, `buffered_bytes`, and `dropped_bytes`.
   `exit_code` is null while running; a nonzero command exit is reported there,

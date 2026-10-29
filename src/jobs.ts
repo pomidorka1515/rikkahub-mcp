@@ -32,7 +32,7 @@ class Job {
   private escalation: NodeJS.Timeout | undefined;
   private capture: OutputCapture;
 
-  constructor(shell: string, command: string, cwd: string, env: Record<string, string>,
+  constructor(shell: string, readonly command: string, readonly cwd: string, env: Record<string, string>,
     private maxBytes: number, private changed: () => void, timeoutMs?: number) {
     this.capture = new OutputCapture(maxBytes);
     this.child = spawn(shell, ["-c", command], {
@@ -145,6 +145,10 @@ export class JobManager {
     const job = this.jobs.get(id);
     if (!job) throw new Error(`unknown job id: ${id}`);
     return job;
+  }
+
+  list(): Array<JobStatus & { command: string; cwd: string }> {
+    return [...this.jobs.values()].map((job) => ({ ...job.status(), command: job.command, cwd: job.cwd }));
   }
 
   async wait(ids: string[], mode: "all" | "any", waitMs: number): Promise<{ ready: boolean; jobs: JobStatus[] }> {

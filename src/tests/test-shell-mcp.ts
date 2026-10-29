@@ -40,7 +40,13 @@ try {
   clients.push(client);
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers } }));
   const names = (await client.listTools()).tools.map((tool) => tool.name);
-  for (const name of ["execute", "grep", "glob", "shell_open", "shell_open_root", "shell_send", "shell_read", "shell_interrupt", "job_output", "job_wait", "job_kill"]) assert.ok(names.includes(name));
+  for (const name of ["execute", "grep", "glob", "shell_open", "shell_open_root", "shell_list", "shell_send", "shell_read", "shell_interrupt", "job_list", "job_output", "job_wait", "job_kill", "project_list"]) assert.ok(names.includes(name));
+  for (const [name, key] of [["job_list", "jobs"], ["shell_list", "shells"], ["project_list", "projects"]] as const) {
+    const result = CallToolResultSchema.parse(await client.callTool({ name, arguments: {} }));
+    const text = result.content[0];
+    assert.equal(text?.type, "text");
+    assert.deepEqual(JSON.parse(text!.type === "text" ? text!.text : "")[key], []);
+  }
   const executed = CallToolResultSchema.parse(await client.callTool({
     name: "execute", arguments: { code: '(await tools.run_command({command:"echo execute-http"})).content[0].text' },
   }));
@@ -81,6 +87,14 @@ try {
     assert.equal(text?.type, "text");
     return JSON.parse(text!.type === "text" ? text!.text : "");
   };
+  const listedJob = json(await call("job_list", {})).jobs.find((item: JobStatus) => item.id === job.id);
+  assert.equal(listedJob.state, "running");
+  assert.equal(listedJob.command, "echo ready; sleep 30");
+  const listedShell = json(await call("shell_list", {})).shells.find((item: ShellSnapshot) => item.shell_id === shell.shell_id);
+  assert.equal(listedShell.state, "idle");
+  assert.equal(listedShell.root, false);
+  assert.ok(listedShell.initial_cwd);
+  assert.deepEqual(json(await call("execute", { code: "JSON.parse((await tools.shell_list({})).content[0].text).shells.map(s => s.shell_id)" })), [shell.shell_id]);
   for (const command of ["sudo id", "su -c id", "/system/bin/tsu", "true; s'u'do id"]) {
     for (const background of [false, true]) {
       const blocked = await call("run_command", { command, background });
@@ -106,6 +120,7 @@ try {
   const dataShell = snapshot(await call("shell_open", { env: { POLICY_DATA: "sudo su tsu" } }));
   assert.equal(snapshot(await call("shell_send", { shell_id: dataShell.shell_id, cmd: 'printf "%s" "$POLICY_DATA"', wait_ms: 1000 })).output, "sudo su tsu");
   snapshot(await call("shell_send", { shell_id: dataShell.shell_id, cmd: "exit", wait_ms: 1000 }));
+  assert.equal(json(await call("shell_list", {})).shells.find((item: ShellSnapshot) => item.shell_id === dataShell.shell_id).state, "exited");
   const blockedExecute = json(await call("execute", {
     code: '(await tools.run_command({command:"tsu"})).isError',
   }));
@@ -123,6 +138,7 @@ try {
   // No Mcp-Session-Id: each request builds a separate MCP server instance.
   const sent = snapshot(await call("shell_send", { shell_id: shell.shell_id, cmd: "export RECONNECT_TEST=yes; sleep 30", wait_ms: 50 }));
   assert.equal(sent.state, "running");
+  assert.equal(json(await call("shell_list", {})).shells.find((item: ShellSnapshot) => item.shell_id === shell.shell_id).state, "running");
   assert.ok((await call("shell_send", { shell_id: shell.shell_id, cmd: "echo busy" })).isError);
   assert.equal(snapshot(await call("shell_interrupt", { shell_id: shell.shell_id })).state, "idle");
   assert.ok((await call("shell_read", { shell_id: "missing" })).isError);
@@ -139,6 +155,7 @@ try {
   const waited = json(await call("job_wait", { ids: [job.id, complete.id], wait_ms: 5000 }));
   assert.equal(waited.ready, true);
   assert.equal(waited.jobs[1].exit_code, 4);
+  assert.equal(json(await call("job_list", {})).jobs.find((item: JobStatus) => item.id === complete.id).state, "exited");
   const foreground = await call("run_command", { command: "echo foreground" });
   assert.ok(!foreground.isError);
   assert.match(foreground.content[0]!.type === "text" ? foreground.content[0]!.text : "", /foreground/);

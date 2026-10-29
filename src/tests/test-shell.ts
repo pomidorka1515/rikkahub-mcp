@@ -84,6 +84,9 @@ try {
   assert.equal(result.output, "survived\n");
   await shell.send("printf 'one\\ntwo\\nthree'", 0);
   await new Promise((resolve) => setTimeout(resolve, 100));
+  const info = manager.list().find((item) => item.shell_id === first.shell_id)!;
+  assert.equal(info.buffered_bytes, Buffer.byteLength("one\ntwo\nthree"));
+  assert.equal(info.initial_cwd, os.homedir());
   assert.equal((await shell.read(1, 0)).output, "one\n");
   assert.equal((await shell.read(1, 0)).output, "two\n");
   assert.equal((await shell.read(1, 0)).output, "three");

@@ -63,6 +63,9 @@ try {
   assert.notEqual(openA.project_id, openB.project_id);
   const aid = openA.project_id as string;
   const bid = openB.project_id as string;
+  assert.deepEqual(JSON.parse(await call("project_list", {})).projects, [
+    { project_id: aid, path: await fs.realpath(a) }, { project_id: bid, path: await fs.realpath(b) },
+  ]);
   for (const [project_id, content] of [[aid, "alpha"], [bid, "beta"]]) {
     await call("write", { project_id, path: "same.txt", content });
   }
@@ -119,6 +122,7 @@ try {
   await call("project_open", { path: b }, true);
   await fs.unlink(path.join(b, "CLAUDE.md"));
   await call("project_close", { project_id: aid });
+  assert.ok(!JSON.parse(await call("project_list", {})).projects.some((project: { project_id: string }) => project.project_id === aid));
   await call("read_file", { project_id: aid, path: "same.txt" }, true);
   assert.match(await call("read_file", { project_id: bid, path: "same.txt" }), /beta appended/);
   const legacy = new ProjectContext();
