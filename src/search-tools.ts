@@ -1,15 +1,11 @@
 import { spawn } from "node:child_process";
-import os from "node:os";
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { z } from "zod";
 import picomatch from "picomatch";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-
-const searchPath = (value = process.cwd()): string => path.resolve(
-  value === "~" ? os.homedir() : value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value,
-);
+import { ProjectContext, projectIdSchema } from "./projects.js";
 
 /** run rg directly, never through a shell. bound output even for huge searches */
 function search(args: string[], separator: string, limit: number, maxBytes: number,
@@ -67,21 +63,22 @@ function search(args: string[], separator: string, limit: number, maxBytes: numb
   });
 }
 
-export function registerSearchTools(server: McpServer, maxBytes: number): void {
+export function registerSearchTools(server: McpServer, maxBytes: number, context = new ProjectContext()): void {
   const resultLimit = z.number().int().positive().optional();
   server.registerTool("glob", {
     title: "Glob",
     description: 'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx").',
     inputSchema: {
+      project_id: projectIdSchema,
       hidden: z.boolean().optional().describe("Include hidden files and directories (default: false)."),
       limit: resultLimit.describe("Maximum number of matching files to return (default: 100)"),
       path: z.string().optional().describe("Directory to search. Defaults to the current working directory."),
       pattern: z.string().describe("Glob pattern to match files against"),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ hidden, limit, path: dir, pattern }) => {
-    const root = searchPath(dir);
+  }, async ({ hidden, limit, path: dir, pattern, project_id }) => {
     try {
+      const root = context.resolve(dir, project_id);
       if (!(await stat(root)).isDirectory()) throw new Error(`Not a directory: ${root}`);
       const matches = picomatch(pattern, { dot: hidden ?? false, basename: !pattern.includes("/") });
       return await search(["--files", "--null", ...(hidden ? ["--hidden"] : []), "--", root],
@@ -96,6 +93,7 @@ export function registerSearchTools(server: McpServer, maxBytes: number): void {
       "Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. " +
       "Returns matching file paths, line numbers, and line previews.",
     inputSchema: {
+      project_id: projectIdSchema,
       caseSensitive: z.boolean().optional().describe("Use case-sensitive matching (default: true)."),
       include: z.string().optional().describe('Glob pattern to filter files (for example, "*.js" or "*.{ts,tsx}")'),
       limit: resultLimit.describe("Maximum number of matching lines to return (default: 100)"),
@@ -104,9 +102,9 @@ export function registerSearchTools(server: McpServer, maxBytes: number): void {
       pattern: z.string().min(1).describe("Regular expression or literal text to match in file contents."),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ caseSensitive, include, limit, literal, path: dir, pattern }) => {
-    const root = searchPath(dir);
+  }, async ({ caseSensitive, include, limit, literal, path: dir, pattern, project_id }) => {
     try {
+      const root = context.resolve(dir, project_id);
       const info = await stat(root);
       if (!info.isFile() && !info.isDirectory()) throw new Error(`Not a file or directory: ${root}`);
       return await search(["--json", "--color", "never", caseSensitive === false ? "--ignore-case" : "--case-sensitive",

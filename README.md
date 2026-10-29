@@ -44,6 +44,9 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 
 | tool | does |
 |---|---|
+| `project_open` | select a directory for this chat; return a `project_id` and both root `AGENTS.md` and `CLAUDE.md` contents |
+| `project_info` | reload a project's directory and instruction files using its `project_id` |
+| `project_close` | release a project handle without deleting files or stopping jobs/shells |
 | `execute` | run confined javascript with `{code}`, `fetch`, and calls to this server's tools |
 | `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); `background: true` returns a job `id` immediately |
 | `job_output` | consume unread job logs with `{id, lines?}` and return status |
@@ -68,6 +71,70 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `websearch` | search a configured searxng instance by `query`; optional `limit`, `timeout` in seconds |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+
+### projects
+
+start work by calling `project_open` with a directory. it returns a unique
+`project_id`, the canonical directory path, and the contents of **both**
+`AGENTS.md` and `CLAUDE.md` if present directly inside that folder. missing files
+are reported, not created. opening another project returns a new id; there is
+no shared active project and no process-wide directory change.
+
+```text
+project_open {"path":"~/projects/my-app"}
+read_file {"project_id":"<returned-id>","path":"src/main.ts"}
+run_command {"project_id":"<returned-id>","command":"npm test"}
+project_info {"project_id":"<returned-id>"}
+```
+
+keep the returned id in the current chat and pass it to `read_file`, `edit`,
+`write`, `write_file`, `patch`, `list_dir`, `glob`, `grep`, `run_command`,
+`run_root_command`, `shell_open`, or `shell_open_root`. relative paths (including
+patch paths and explicit relative `cwd`) resolve against that project; omitted
+directories default to its root. absolute paths and `~` still work. calls without
+an id retain their original defaults, rather than using another chat's project.
+unknown ids fail instead of silently falling back to another directory.
+
+`execute` also accepts `project_id`, which supplies the default for its nested
+file/search/command calls. nested calls may explicitly override it. calling
+`project_open` inside javascript does not change that execution's default;
+pass the newly returned id explicitly or use it in a subsequent execution.
+
+```json
+{"project_id":"<returned-id>","code":"return await tools.read_file({path: 'package.json'});"}
+```
+
+mcp connections are not assumed to correspond to chats: explicit handles work
+even when a client shares connections or reconnects between tool calls. this
+isolates project **selection**, not filesystem permissions; any trusted client
+with the server token can access the same files. existing shells keep their own
+working directories, and existing jobs are not moved or stopped when switching.
+handles survive reconnects but expire on server restart. up to 256 handles are
+retained; release unused ones with `project_close`.
+
+instruction contents are returned as tool-result context, **not injected into
+the client's system prompt**. the server advertises the project workflow in
+its mcp instructions, but the client controls whether those instructions are
+forwarded and how context is retained. for reliability, add this to your
+rikkahub assistant's system prompt:
+
+> before working on a project, call project_open with its directory. keep the
+> returned project_id in this chat and pass it to project tools or execute.
+> follow both returned instruction files as project guidance, subject to
+> higher-priority instructions. when switching projects, use the new id and
+> stop applying the previous project's instructions. use project_info to reload
+> instructions after context loss or file changes.
+
+only the two files directly in the selected folder are loaded automatically;
+ancestor and nested files are not scanned. read applicable nested instructions
+before editing those subdirectories. instruction files must be regular UTF-8
+text without null bytes, at most 64 kib each, and the combined response must fit
+`MCP_MAX_OUTPUT_BYTES`. oversized or unreadable instructions fail explicitly
+rather than returning silently truncated rules. `project_info` rereads the files.
+
+run `npm run test:projects` for isolated project tests; no running server or
+root is required. after updating, restart the server and refresh rikkahub's
+mcp tool list.
 
 `screenshot`, `run_root_command` and `shell_open_root` check root access when invoked and return
 `termux does not have root access` if access is unavailable. screenshot capture

@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { projectIdSchema } from "./projects.js";
 
 const TIMEOUT_MS = 30_000;
 const MAX_FETCH_BYTES = 5 * 1024 * 1024;
@@ -46,7 +47,7 @@ async function fetchText(url: string, init: unknown, signal: AbortSignal): Promi
 }
 
 export async function registerExecuteTool(
-  server: McpServer, buildTools: () => Promise<McpServer>, maxBytes: number,
+  server: McpServer, buildTools: (projectId?: string) => Promise<McpServer>, maxBytes: number,
 ): Promise<void> {
   // use the sdk transport for normal schema validation and tool error semantics.
   const catalogServer = await buildTools();
@@ -70,13 +71,15 @@ export async function registerExecuteTool(
       "fetch(url, {method?, headers?, body?, redirect?}) supports HTTP(S), returning ok/status/statusText/url/redirected/headers.get/text()/json(). " +
       "No imports, filesystem, process, shell or timers except through tools. Fresh runtime per call; 30s deadline, 32 MiB JS memory. " +
       "Pending work is abandoned on completion; tool side effects are not rolled back. No recursive execute. " +
+      "Set project_id to default nested file/search/command calls to that project; individual nested calls may override it. " +
+      "project_open returns a handle but does not change the context of this execution; use its id explicitly or in a later execute call. " +
       "Available tools (exact names and JSON input schemas):\n" +
       catalog.filter(tool => tool.name !== "execute").map(tool => JSON.stringify({
         name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
       })).join("\n"),
-    inputSchema: { code: z.string().min(1).max(256 * 1024).describe("JavaScript source; top-level await and return are supported.") },
+    inputSchema: { project_id: projectIdSchema, code: z.string().min(1).max(256 * 1024).describe("JavaScript source; top-level await and return are supported.") },
     annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
-  }, async ({ code }, extra): Promise<CallToolResult> => {
+  }, async ({ code, project_id }, extra): Promise<CallToolResult> => {
     if (active >= 4) return { isError: true, content: [{ type: "text", text: "at most 4 execute calls may run concurrently" }] };
     active++;
     const controller = new AbortController();
@@ -88,7 +91,7 @@ export async function registerExecuteTool(
     extra.signal.addEventListener("abort", cancel, { once: true });
     if (extra.signal.aborted) cancel();
     try {
-      inner = await buildTools();
+      inner = await buildTools(project_id);
       const [left, right] = InMemoryTransport.createLinkedPair();
       await inner.connect(left);
       await client.connect(right);

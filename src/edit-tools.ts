@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ProjectContext, projectIdSchema } from "./projects.js";
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
-const resolvePath = (value: string): string => path.resolve(
-  value === "~" ? os.homedir() : value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value,
-);
 
 // serialize edits across clients, including legacy writes, to avoid lost updates.
 let pending: Promise<unknown> = Promise.resolve();
@@ -48,7 +45,7 @@ type Operation = { kind: "add"; file: string; content: string }
   | { kind: "delete"; file: string }
   | { kind: "update"; file: string; move?: string; hunks: Hunk[] };
 
-function parsePatch(text: string): Operation[] {
+function parsePatch(text: string, resolvePath: (value: string) => string): Operation[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   if (lines.at(-1) === "") lines.pop();
   if (lines.shift() !== "*** Begin Patch" || lines.pop() !== "*** End Patch") {
@@ -132,8 +129,8 @@ function updateText(content: string, hunks: Hunk[], file: string): string {
   return lines.join(eol) + (lines.length && (trailing || content === "") ? eol : "");
 }
 
-async function applyPatch(text: string): Promise<string> {
-  const operations = parsePatch(text);
+async function applyPatch(text: string, resolvePath: (value: string) => string): Promise<string> {
+  const operations = parsePatch(text, resolvePath);
   const before = new Map<string, string | undefined>();
   const after = new Map<string, string | undefined>();
   const claim = async (file: string): Promise<string | undefined> => {
@@ -186,18 +183,18 @@ async function applyPatch(text: string): Promise<string> {
   return `patch applied:\n${summary.join("\n")}`;
 }
 
-export function registerEditTools(server: McpServer): void {
-  const filePath = z.string().min(1).describe("File path; relative paths use the server working directory. ~ is expanded.");
+export function registerEditTools(server: McpServer, context = new ProjectContext()): void {
+  const filePath = z.string().min(1).describe("File path; relative paths use the selected project, otherwise the server working directory. ~ is expanded.");
   const annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
   server.registerTool("edit", {
     title: "Edit file",
     description: "Replace exact text in an existing UTF-8 file. oldString must be nonempty and match exactly once unless replaceAll=true. " +
       "No fuzzy or whitespace matching. Read the file first; omit read_file line-number prefixes from strings.",
-    inputSchema: { path: filePath, oldString: z.string().min(1), newString: z.string(), replaceAll: z.boolean().optional() },
+    inputSchema: { project_id: projectIdSchema, path: filePath, oldString: z.string().min(1), newString: z.string(), replaceAll: z.boolean().optional() },
     annotations,
-  }, ({ path: name, oldString, newString, replaceAll }) => locked(async () => {
+  }, ({ path: name, oldString, newString, replaceAll, project_id }) => locked(async () => {
     if (oldString === newString) throw new Error("oldString and newString must differ");
-    const file = resolvePath(name);
+    const file = context.resolve(name, project_id);
     const content = await readText(file);
     if (content === undefined) throw new Error(`file does not exist: ${file}`);
     const parts = content.split(oldString);
@@ -210,8 +207,8 @@ export function registerEditTools(server: McpServer): void {
     return `edited ${file} (${count} replacement${count === 1 ? "" : "s"})`;
   }));
 
-  const write = (name: string, content: string, append = false) => locked(async () => {
-    const file = resolvePath(name);
+  const write = (name: string, content: string, append = false, projectId?: string) => locked(async () => {
+    const file = context.resolve(name, projectId);
     const existing = await readText(file);
     checkContent(append ? (existing ?? "") + content : content);
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -220,12 +217,12 @@ export function registerEditTools(server: McpServer): void {
   });
   server.registerTool("write", {
     title: "Write file", description: "Create or completely replace a UTF-8 text file, creating parent directories. Prefer edit for focused changes.",
-    inputSchema: { path: filePath, content: z.string() }, annotations,
-  }, ({ path: name, content }) => write(name, content));
+    inputSchema: { project_id: projectIdSchema, path: filePath, content: z.string() }, annotations,
+  }, ({ path: name, content, project_id }) => write(name, content, false, project_id));
   server.registerTool("write_file", {
     title: "Write file", description: "Create or overwrite a UTF-8 text file (parent directories are created). Set append to add instead.",
-    inputSchema: { path: filePath, content: z.string(), append: z.boolean().optional() }, annotations,
-  }, ({ path: name, content, append }) => write(name, content, append));
+    inputSchema: { project_id: projectIdSchema, path: filePath, content: z.string(), append: z.boolean().optional() }, annotations,
+  }, ({ path: name, content, append, project_id }) => write(name, content, append, project_id));
   server.registerTool("patch", {
     title: "Apply patch",
     description: "Apply an OpenCode-style multi-file patch. patchText starts with *** Begin Patch and ends with *** End Patch. " +
@@ -235,6 +232,9 @@ export function registerEditTools(server: McpServer): void {
       "(LF/CRLF normalized); no fuzzy matching or unified-diff line-number headers. All paths and hunks are validated before writes. " +
       "Adds and moves never overwrite existing files. Each path may occur only once. Updates preserve newline style and final newline. " +
       "Filesystem failures can leave partial changes; inspect files before retrying. Text files only, maximum 16 MiB each; symlink targets rejected.",
-    inputSchema: { patchText: z.string().min(1) }, annotations,
-  }, ({ patchText }) => locked(() => applyPatch(patchText)));
+    inputSchema: { project_id: projectIdSchema, patchText: z.string().min(1) }, annotations,
+  }, ({ patchText, project_id }) => locked(() => {
+    context.resolve(undefined, project_id);
+    return applyPatch(patchText, (value) => context.resolve(value, project_id));
+  }));
 }

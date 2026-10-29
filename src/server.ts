@@ -22,6 +22,7 @@ import { registerExecuteTool } from "./execute-tool.js";
 import { requireRootAccess } from "./root-access.js";
 import { registerScreenshotTool } from "./screenshot-tool.js";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
+import { ProjectContext, projectIdSchema, registerProjectTools } from "./projects.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -320,7 +321,9 @@ function expandHome(p: string): string {
 
 /* ------------------------------------------------------------------- tools */
 
-async function buildServer(includeExecute = true): Promise<McpServer> {
+async function buildServer(includeExecute = true, defaultProjectId?: string): Promise<McpServer> {
+  const context = new ProjectContext(defaultProjectId);
+  context.selected();
   const server = new McpServer(
     { name: "termux-shell", version: "1.0.0" },
     {
@@ -333,7 +336,11 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
         "Use shell_open/send/read/interrupt (shell_open_root for checked root access) " +
          "for persistent shells and long builds. Save shell_id; check state and exit_code before assuming success. " +
          "Read files before editing. Prefer edit for exact replacements, patch for multi-file diffs (add/update/move/delete), " +
-         "and write for new files or full replacements; do not use shell commands to edit files when these tools suffice.",
+          "and write for new files or full replacements; do not use shell commands to edit files when these tools suffice. " +
+          "Before working on a project, call project_open with its directory and follow the returned AGENTS.md and CLAUDE.md " +
+          "as project guidance, subject to higher-priority instructions. Save project_id in this chat and pass it to project tools " +
+          "or execute; there is no shared active project. When switching, stop applying the previous project's instructions. " +
+          "Use project_info to reload instructions after context loss or changes.",
     },
   );
 
@@ -351,6 +358,7 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
         "Use job_output, job_wait and job_kill to manage it. Background stdout/stderr share a rolling buffer. " +
         "sudo, su and tsu are blocked; use run_root_command or shell_open_root for root access.",
       inputSchema: {
+        project_id: projectIdSchema,
         command: z.string().min(1).describe("The command line to run, e.g. `ls -la ~/projects`"),
         cwd: z.string().optional().describe("Working directory (default: home). ~ is expanded."),
         timeout_ms: z
@@ -364,7 +372,9 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       },
       annotations: { openWorldHint: true, readOnlyHint: false },
     },
-    async ({ command, cwd, timeout_ms, env, background }): Promise<CallToolResult> => {
+    async ({ command, cwd, timeout_ms, env, background, project_id }): Promise<CallToolResult> => {
+      try { cwd = context.resolve(cwd, project_id, os.homedir()); }
+      catch (error) { return { isError: true, content: [{ type: "text", text: errorMessage(error) }] }; }
       if (background) {
         try {
           const job = await jobs.start(command, path.resolve(expandHome(cwd || "~")), env,
@@ -438,11 +448,12 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       "Returns shell_id. Survives client reconnects, not server restarts. No PTY or interactive stdin. " +
       "At most 16 shells; send 'exit' when finished. sudo, su and tsu are blocked; use shell_open_root for root.",
     inputSchema: {
+      project_id: projectIdSchema,
       cwd: z.string().optional().describe("Working directory (default home); ~ is expanded"),
       env: z.record(z.string(), z.string()).optional().describe("Extra environment variables"),
     },
     annotations: { openWorldHint: true, readOnlyHint: false },
-  }, ({ cwd, env }) => shellResult(() => shells.open(path.resolve(expandHome(cwd || "~")), env)));
+  }, ({ cwd, env, project_id }) => shellResult(() => shells.open(context.resolve(cwd, project_id, os.homedir()), env)));
 
   server.registerTool("shell_open_root", {
     title: "Open persistent root shell",
@@ -451,13 +462,15 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       "Shares the 16-shell limit with user shells. Send 'exit' when finished. " +
       "preserve_env=true uses sudo -E, matching run_root_command.",
     inputSchema: {
+      project_id: projectIdSchema,
       cwd: z.string().optional().describe("Working directory (default: root shell's home); ~ is expanded"),
       env: z.record(z.string(), z.string()).optional().describe("Extra environment variables"),
       preserve_env: z.boolean().optional().describe("Keep the full Termux environment; default false"),
     },
     annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
-  }, ({ cwd, env, preserve_env }) => shellResult(() => shells.openRoot(
-    cwd === undefined ? undefined : path.resolve(expandHome(cwd)), env, preserve_env ? "sudo" : "tsu")));
+  }, ({ cwd, env, preserve_env, project_id }) => shellResult(() => shells.openRoot(
+    cwd === undefined && context.selected(project_id) === undefined ? undefined : context.resolve(cwd, project_id),
+    env, preserve_env ? "sudo" : "tsu")));
 
   server.registerTool("shell_send", {
     title: "Send shell command",
@@ -503,6 +516,7 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
         "Same timeout and output limits as run_command. Use only when root is genuinely required " +
         "(/data/adb, /system, iptables, pm, settings, dumpsys, mounting).",
       inputSchema: {
+        project_id: projectIdSchema,
         command: z.string().min(1).describe("The command to run as root, e.g. `id` or `ls /data/adb`"),
         cwd: z.string().optional().describe("Working directory (default: root shell's home)"),
         timeout_ms: z
@@ -519,8 +533,9 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       },
       annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
     },
-    async ({ command, cwd, timeout_ms, preserve_env, env }): Promise<CallToolResult> => {
+    async ({ command, cwd, timeout_ms, preserve_env, env, project_id }): Promise<CallToolResult> => {
       try {
+        if (cwd !== undefined || context.selected(project_id) !== undefined) cwd = context.resolve(cwd, project_id);
         await requireRootAccess(preserve_env ? "sudo" : "tsu");
       } catch (error) {
         return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
@@ -536,10 +551,11 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
     },
   );
 
-  registerReadTool(server, MAX_OUTPUT_BYTES);
+  registerProjectTools(server, MAX_OUTPUT_BYTES, context);
+  registerReadTool(server, MAX_OUTPUT_BYTES, context);
   registerScreenshotTool(server);
 
-  registerEditTools(server);
+  registerEditTools(server, context);
 
   server.registerTool(
     "list_dir",
@@ -547,13 +563,14 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       title: "List directory",
       description: "List a directory (name, type, size). Hidden files are included.",
       inputSchema: {
+        project_id: projectIdSchema,
         path: z.string().optional().describe("Directory path (default: home)"),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ path: p }): Promise<CallToolResult> => {
-      const dir = path.resolve(expandHome(p || "~"));
+    async ({ path: p, project_id }): Promise<CallToolResult> => {
       try {
+        const dir = context.resolve(p, project_id, os.homedir());
         const entries = await fsp.readdir(dir, { withFileTypes: true });
         const rows: string[] = [];
         for (const e of entries.slice(0, 500)) {
@@ -574,9 +591,9 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
     },
   );
 
-  registerSearchTools(server, MAX_OUTPUT_BYTES);
+  registerSearchTools(server, MAX_OUTPUT_BYTES, context);
   registerWebTools(server, MAX_OUTPUT_BYTES);
-  if (includeExecute) await registerExecuteTool(server, () => buildServer(false), MAX_OUTPUT_BYTES);
+  if (includeExecute) await registerExecuteTool(server, (id) => buildServer(false, id), MAX_OUTPUT_BYTES);
   return server;
 }
 
