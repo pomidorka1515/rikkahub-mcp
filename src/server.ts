@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ShellManager, type ShellSnapshot } from "./persistent-shell.js";
 import { registerSearchTools } from "./search-tools.js";
+import { registerReadTool } from "./read-tool.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -444,38 +445,7 @@ function buildServer(): McpServer {
     },
   );
 
-  server.registerTool(
-    "read_file",
-    {
-      title: "Read file",
-      description: "Read a UTF-8 text file from the device. Returns at most max_bytes.",
-      inputSchema: {
-        path: z.string().describe("Absolute path, or ~/relative"),
-        max_bytes: z.number().int().positive().optional().describe("Truncate after N bytes"),
-      },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ path: p, max_bytes }): Promise<CallToolResult> => {
-      const file = path.resolve(expandHome(p));
-      try {
-        const st = await fsp.stat(file);
-        if (st.isDirectory()) return { content: [{ type: "text", text: `EISDIR: ${file}` }], isError: true };
-        const limit = Math.min(max_bytes || MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES);
-        const fh = await fsp.open(file, "r");
-        try {
-          const buf = Buffer.alloc(Math.min(limit, st.size));
-          const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
-          let text = buf.subarray(0, bytesRead).toString("utf8");
-          if (st.size > bytesRead) text += `\n…[${st.size - bytesRead} more bytes]`;
-          return { content: [{ type: "text", text }] };
-        } finally {
-          await fh.close();
-        }
-      } catch (e) {
-        return { content: [{ type: "text", text: `${errorCode(e)}: ${errorMessage(e)}` }], isError: true };
-      }
-    },
-  );
+  registerReadTool(server, MAX_OUTPUT_BYTES);
 
   server.registerTool(
     "write_file",

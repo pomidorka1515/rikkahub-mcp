@@ -8,6 +8,7 @@
     "rikkahub-mcp": "dist/server.js"
   },
   "scripts": {
+    "test:read": "npm run build && node --enable-source-maps dist/tests/test-read.js",
     "test:search": "npm run build && node --enable-source-maps dist/tests/test-search.js",
     "test:shell": "npm run build && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js",
     "build": "tsc -p tsconfig.json",
@@ -15,7 +16,7 @@
     "prestart": "npm run build",
     "start": "node --enable-source-maps dist/server.js",
     "pretest": "npm run build",
-    "test": "node --enable-source-maps dist/tests/test-search.js && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js && node --enable-source-maps dist/tests/test-client.js && node --enable-source-maps dist/tests/test-sse-url-token.js",
+    "test": "node --enable-source-maps dist/tests/test-read.js && node --enable-source-maps dist/tests/test-search.js && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js && node --enable-source-maps dist/tests/test-client.js && node --enable-source-maps dist/tests/test-sse-url-token.js",
     "prepack": "npm run build"
   },
   "license": "MIT",

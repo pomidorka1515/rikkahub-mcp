@@ -50,13 +50,33 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
 | `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
 | `shell_interrupt` | interrupt the active command with `{shell_id, wait_ms?}`, keeping the shell usable |
-| `read_file` | read a text file |
+| `read_file` | read numbered text lines with optional `offset`, `limit`, and `max_bytes` |
 | `write_file` | write/append a text file |
 | `list_dir` | list a directory |
 | `glob` | find files by `pattern`; optional `path`, `hidden`, `limit` |
 | `grep` | search contents by `pattern`; optional `path`, `include`, `literal`, `caseSensitive`, `limit` |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+
+### reading files
+
+`read_file` returns numbered UTF-8 text lines. `offset` is the first line to read
+(1-based, default 1); `limit` defaults to 2000 and accepts 1–2000 lines.
+each page is capped at 50 KiB (or `MCP_MAX_OUTPUT_BYTES`, whichever is smaller).
+the existing `max_bytes` option can lower this cap. paths and status notices
+are additional to the page cap. lines longer than 2000 characters are shortened
+with a notice; shortened text is not recoverable through line pagination.
+when a page is full, the response provides the next `offset`; otherwise it
+reports end of file. offsets beyond end of file are errors, except for the
+default read of an empty file. relative paths resolve from the server working
+directory, and `~` is expanded. binary files containing null bytes are rejected;
+image and PDF reading are not supported.
+
+```text
+read_file {"path":"~/my-project/src/server.ts","offset":120,"limit":80}
+```
+
+run `npm run test:read` for isolated reading tests (no running server or root needed).
 
 ### File searches
 
