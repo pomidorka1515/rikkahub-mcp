@@ -18,6 +18,7 @@ import { registerWebTools } from "./web-tools.js";
 import { registerReadTool } from "./read-tool.js";
 import { registerEditTools } from "./edit-tools.js";
 import { JobManager } from "./jobs.js";
+import { registerExecuteTool } from "./execute-tool.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -311,7 +312,7 @@ function expandHome(p: string): string {
 
 /* ------------------------------------------------------------------- tools */
 
-function buildServer(): McpServer {
+async function buildServer(includeExecute = true): Promise<McpServer> {
   const server = new McpServer(
     { name: "termux-shell", version: "1.0.0" },
     {
@@ -545,6 +546,7 @@ function buildServer(): McpServer {
 
   registerSearchTools(server, MAX_OUTPUT_BYTES);
   registerWebTools(server, MAX_OUTPUT_BYTES);
+  if (includeExecute) await registerExecuteTool(server, () => buildServer(false), MAX_OUTPUT_BYTES);
   return server;
 }
 
@@ -669,7 +671,7 @@ async function handleStreamable(req: IncomingMessage, res: ServerResponse, parse
   }
   const method = rpcMethod(parsedBody);
   if (method && method !== "initialize") {
-    const server = buildServer();
+    const server = await buildServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: JSON_RESPONSES,
@@ -682,7 +684,7 @@ async function handleStreamable(req: IncomingMessage, res: ServerResponse, parse
     }
     return;
   }
-  const server = buildServer();
+  const server = await buildServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: JSON_RESPONSES,
@@ -706,7 +708,7 @@ async function handleLegacySse(req: IncomingMessage, res: ServerResponse): Promi
   const endpoint = "/messages" + (TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "");
   const transport = new SSEServerTransport(endpoint, res);
   sseTransports.set(transport.sessionId, transport);
-  const server = buildServer();
+  const server = await buildServer();
   let closing = false;
   transport.onclose = () => {
     if (closing) return;

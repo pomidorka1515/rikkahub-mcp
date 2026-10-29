@@ -8,6 +8,7 @@
     "rikkahub-mcp": "dist/server.js"
   },
   "scripts": {
+    "test:execute": "npm run build && node --enable-source-maps dist/tests/test-execute.js",
     "test:web": "npm run build && node --enable-source-maps dist/tests/test-web.js",
     "test:edit": "npm run build && node --enable-source-maps dist/tests/test-edit.js",
     "test:jobs": "npm run build && node --enable-source-maps dist/tests/test-jobs.js && node --enable-source-maps dist/tests/test-shell-mcp.js",
@@ -19,14 +20,16 @@
     "prestart": "npm run build",
     "start": "node --enable-source-maps dist/server.js",
     "pretest": "npm run build",
-    "test": "node --enable-source-maps dist/tests/test-web.js && node --enable-source-maps dist/tests/test-edit.js && node --enable-source-maps dist/tests/test-read.js && node --enable-source-maps dist/tests/test-search.js && node --enable-source-maps dist/tests/test-jobs.js && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js && node --enable-source-maps dist/tests/test-client.js && node --enable-source-maps dist/tests/test-sse-url-token.js",
+    "test": "node --enable-source-maps dist/tests/test-execute.js && node --enable-source-maps dist/tests/test-web.js && node --enable-source-maps dist/tests/test-edit.js && node --enable-source-maps dist/tests/test-read.js && node --enable-source-maps dist/tests/test-search.js && node --enable-source-maps dist/tests/test-jobs.js && node --enable-source-maps dist/tests/test-shell.js && node --enable-source-maps dist/tests/test-shell-mcp.js && node --enable-source-maps dist/tests/test-client.js && node --enable-source-maps dist/tests/test-sse-url-token.js",
     "prepack": "npm run build"
   },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "acorn": "^8.19.0",
     "cheerio": "^1.2.0",
     "picomatch": "^4.0.7",
+    "quickjs-emscripten": "^0.32.0",
     "turndown": "^7.2.4",
     "zod": "^4.6.7"
   },

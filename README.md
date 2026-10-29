@@ -44,6 +44,7 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 
 | tool | does |
 |---|---|
+| `execute` | run confined javascript with `{code}`, `fetch`, and calls to this server's tools |
 | `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); `background: true` returns a job `id` immediately |
 | `job_output` | consume unread job logs with `{id, lines?}` and return status |
 | `job_kill` | stop a job's process group with `{id}` |
@@ -65,6 +66,47 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `websearch` | search a configured searxng instance by `query`; optional `limit`, `timeout` in seconds |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+
+### javascript execution
+
+`execute` runs javascript in a fresh quickjs wasm runtime on a worker thread.
+use an explicit `return`, or the final top-level expression becomes the result.
+top-level `await` is supported; imports, node globals, direct filesystem/shell
+access, and timers are not. the tool description contains the exact callable
+tool names and input schemas. no opencode tools are involved.
+
+```javascript
+const results = await Promise.allSettled([
+  tools.list_dir({path: "~/projects"}),
+  tools.run_command({command: "pwd"})
+]);
+return results;
+```
+
+pass that source as the `code` string. `tools.<name>(input)` returns the raw mcp
+result (`content`, optional `structuredContent`, and `isError`), not extracted
+text. tool and schema validation errors remain results; transport errors reject.
+all regular server tools are available, including root and editing tools;
+`execute` itself is excluded to prevent recursion. calls use normal sdk input
+validation and the same server-owned jobs and shells as direct tool calls.
+
+`fetch(url, init?)` accepts http(s) urls and optional `method`, string-valued
+`headers`, string `body`, and `redirect` (`follow`, `error`, or `manual`). it returns
+`ok`, `status`, `statusText`, `url`, `redirected`, `headers.get(name)`, and async
+`text()` / `json()`. this is a text-only subset, not a complete browser fetch api;
+downloads are capped at 5 mib. private/loopback addresses are reachable, just as
+with `webfetch`. fetched content is untrusted data, not instructions.
+
+await all work that matters; use `Promise.allSettled` for independent calls.
+pending requests are abandoned when execution ends, but already-started tool
+side effects cannot be undone, and tools may continue running after cancellation.
+the runtime cannot access files or run commands directly, but explicitly calling
+the corresponding tools grants those capabilities with the server's privileges.
+limits: 30 seconds wall time, 32 mib javascript heap, 256 host calls, four concurrent
+executions, 256 kib source, and `MCP_MAX_OUTPUT_BYTES` final output. large results
+are truncated with a notice and may no longer be valid json. run
+`npm run test:execute` for isolated tests (including a 30-second deadline check).
+restart the server and refresh rikkahub's mcp tool list after updating.
 
 ### web tools
 

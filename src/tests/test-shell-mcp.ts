@@ -40,7 +40,12 @@ try {
   clients.push(client);
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers } }));
   const names = (await client.listTools()).tools.map((tool) => tool.name);
-  for (const name of ["grep", "glob", "shell_open", "shell_send", "shell_read", "shell_interrupt", "job_output", "job_wait", "job_kill"]) assert.ok(names.includes(name));
+  for (const name of ["execute", "grep", "glob", "shell_open", "shell_send", "shell_read", "shell_interrupt", "job_output", "job_wait", "job_kill"]) assert.ok(names.includes(name));
+  const executed = CallToolResultSchema.parse(await client.callTool({
+    name: "execute", arguments: { code: '(await tools.run_command({command:"echo execute-http"})).content[0].text' },
+  }));
+  assert.ok(!executed.isError, JSON.stringify(executed));
+  assert.match(executed.content[0]!.type === "text" ? executed.content[0]!.text : "", /execute-http/);
   const opened = CallToolResultSchema.parse(await client.callTool({ name: "shell_open", arguments: {} }));
   const first = opened.content[0];
   assert.equal(first?.type, "text");
@@ -77,6 +82,10 @@ try {
     return JSON.parse(text!.type === "text" ? text!.text : "");
   };
   assert.equal(json(await call("job_wait", { ids: [job.id], wait_ms: 20 })).ready, false);
+  const viaExecute = json(await call("execute", {
+    code: `JSON.parse((await tools.job_wait({ids:[${JSON.stringify(job.id)}],wait_ms:0})).content[0].text).ready`,
+  }));
+  assert.equal(viaExecute, false);
   assert.equal(json(await call("job_output", { id: job.id, lines: 1 })).output, "ready\n");
   assert.ok((await call("job_output", { id: "missing" })).isError);
   assert.ok((await call("job_wait", { ids: [] })).isError);
@@ -92,6 +101,9 @@ try {
   const sse = new Client({ name: "shell-sse-test", version: "1" });
   clients.push(sse);
   await sse.connect(new SSEClientTransport(new URL(`${base}/sse?token=${token}`)));
+  assert.equal(json(CallToolResultSchema.parse(await sse.callTool({
+    name: "execute", arguments: { code: "6 * 7" },
+  }))), 42);
   json(CallToolResultSchema.parse(await sse.callTool({ name: "job_kill", arguments: { id: job.id } })));
   assert.equal(json(await call("job_wait", { ids: [job.id], mode: "all", wait_ms: 5000 })).ready, true);
   const complete = json(await call("run_command", { command: "exit 4", background: true }));
