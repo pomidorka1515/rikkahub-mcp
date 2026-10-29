@@ -47,8 +47,8 @@ click on your assistant:
 | `project_list` | list retained project ids and canonical paths across clients |
 | `project_info` | reload a project's directory and instruction files using its `project_id` |
 | `project_close` | release a project handle without deleting files or stopping jobs/shells |
-| `execute` | run confined javascript with `{code}`, `fetch`, and calls to this server's tools |
-| `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); `background: true` returns a job `id` immediately |
+| `execute` | run confined javascript with `{code}`, `fetch`, and calls to this server's tools; structured final value in `result` |
+| `run_command` | run a bash command (`cwd`, `timeout_ms`, `env` optional); structured completion fields; `background: true` returns a job `id` immediately |
 | `job_list` | list retained jobs, their status, original commands, and working directories |
 | `job_output` | read unread job logs with `{id, lines?, peek?}` and return status; `peek: true` does not consume |
 | `job_kill` | stop a job's process group with `{id}` |
@@ -78,6 +78,23 @@ commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
 the three list tools are server-wide, not scoped to a chat; any client with the
 token can see all retained handles and job commands. oversized list results may
 be truncated with an `output_path` for recovery.
+
+command, job, shell, project, and `execute` tools advertise `outputSchema` and
+return `structuredContent` alongside the existing text blocks. job/shell/project
+objects keep the same field names as their json text. foreground commands expose
+`ok`, `exitCode`, `signal`, `timedOut`, `durationMs`, `stdout`, and `stderr`;
+`project_close` exposes `project_id` and `released`. `execute` wraps any final json
+value (including arrays, primitives, and null) in `{result: ...}`. nested calls can
+read these fields directly, for example:
+`return (await tools.job_list({})).structuredContent.jobs`.
+
+oversized structured payloads are replaced with `{truncated: true, output_path?,
+output_capture_error?}`, not duplicated beyond the output limit. payload fields
+are optional in the advertised schemas to allow this recovery form. read the saved
+serialized object before using its fields; for `execute`, the saved file contains
+the original final value without the `result` wrapper. capture warnings still
+mean saved output may be incomplete. ordinary tool errors remain text blocks with
+`isError: true`; text-oriented and attachment tools retain their existing formats.
 
 ### projects
 

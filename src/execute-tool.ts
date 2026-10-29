@@ -5,7 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { projectIdSchema } from "./projects.js";
-import { recoverableText } from "./output-store.js";
+import { boundedOutputSchema, jsonResult } from "./structured-result.js";
 
 const TIMEOUT_MS = 30_000;
 const MAX_FETCH_BYTES = 5 * 1024 * 1024;
@@ -75,11 +75,13 @@ export async function registerExecuteTool(
       "Truncated final output provides output_path to the full serialized result; nested tools may provide their own output paths. " +
       "Set project_id to default nested file/search/command calls to that project; individual nested calls may override it. " +
       "project_open returns a handle but does not change the context of this execution; use its id explicitly or in a later execute call. " +
-      "Available tools (exact names and JSON input schemas):\n" +
+      "The final value is available as structuredContent.result; oversized results use truncated and recovery metadata instead. " +
+      "Available tools (exact names and JSON input/output schemas):\n" +
       catalog.filter(tool => tool.name !== "execute").map(tool => JSON.stringify({
-        name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
+        name: tool.name, description: tool.description, inputSchema: tool.inputSchema, outputSchema: tool.outputSchema,
       })).join("\n"),
     inputSchema: { project_id: projectIdSchema, code: z.string().min(1).max(256 * 1024).describe("JavaScript source; top-level await and return are supported.") },
+    outputSchema: boundedOutputSchema({ result: z.unknown() }),
     annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
   }, async ({ code, project_id }, extra): Promise<CallToolResult> => {
     if (active >= 4) return { isError: true, content: [{ type: "text", text: "at most 4 execute calls may run concurrently" }] };
@@ -129,8 +131,7 @@ export async function registerExecuteTool(
           }
         });
       });
-      const text = JSON.stringify(value) ?? "null";
-      return { content: [{ type: "text", text: recoverableText(text, maxBytes) }] };
+      return jsonResult({ result: value ?? null }, maxBytes, JSON.stringify(value) ?? "null");
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
     } finally {

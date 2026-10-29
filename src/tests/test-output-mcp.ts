@@ -41,6 +41,13 @@ try {
     const result = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }));
     const text = result.content.map(item => item.type === "text" ? item.text : "").join("\n");
     assert.equal(Boolean(result.isError), error, text);
+    if (name === "run_command" && result.structuredContent?.truncated) {
+      assert.ok(!("stdout" in result.structuredContent));
+      assert.equal(typeof result.structuredContent.output_path, "string");
+      const saved = JSON.parse(await readFile(result.structuredContent.output_path as string, "utf8"));
+      assert.equal(typeof saved.stdout, "string");
+      assert.ok(JSON.stringify(result.structuredContent).length < 1024);
+    }
     return text;
   };
   const files = (text: string): string[] => [...text.matchAll(/\noutput_path: (.+)\n/g)].map(match => match[1]!);
@@ -65,6 +72,15 @@ try {
   const timed = await call("run_command", { command: "printf '%3000s' x; sleep 30", timeout_ms: 100 }, true);
   assert.match(timed, /timed out/);
   assert.equal(await readFile(files(timed)[0]!, "utf8"), " ".repeat(2999) + "x");
+  await call("run_command", { command: `true #${"x".repeat(1500)}`, background: true });
+  const listed = CallToolResultSchema.parse(await client.callTool({ name: "job_list", arguments: {} }));
+  assert.ok(!listed.isError);
+  assert.equal(listed.structuredContent?.truncated, true);
+  assert.ok(!("jobs" in listed.structuredContent!));
+  assert.ok(JSON.stringify(listed.structuredContent).length < 1024);
+  const recovered = JSON.parse(await readFile(listed.structuredContent!.output_path as string, "utf8"));
+  assert.equal(recovered.jobs.length, 1);
+  assert.equal(recovered.jobs[0].command, `true #${"x".repeat(1500)}`);
   console.log("recoverable command output MCP tests passed");
 } finally {
   await client.close();

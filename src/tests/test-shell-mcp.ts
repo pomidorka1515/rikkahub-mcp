@@ -39,13 +39,20 @@ try {
   const client = new Client({ name: "shell-test", version: "1" });
   clients.push(client);
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers } }));
-  const names = (await client.listTools()).tools.map((tool) => tool.name);
+  const tools = (await client.listTools()).tools;
+  const names = tools.map((tool) => tool.name);
+  for (const name of ["run_command", "run_root_command", "job_list", "job_output", "job_wait", "job_kill",
+    "shell_open", "shell_open_root", "shell_send", "shell_read", "shell_interrupt", "shell_list",
+    "project_open", "project_info", "project_list", "project_close", "execute"]) {
+    assert.equal(tools.find(tool => tool.name === name)?.outputSchema?.type, "object", name);
+  }
   for (const name of ["execute", "grep", "glob", "shell_open", "shell_open_root", "shell_list", "shell_send", "shell_read", "shell_interrupt", "job_list", "job_output", "job_wait", "job_kill", "project_list"]) assert.ok(names.includes(name));
   for (const [name, key] of [["job_list", "jobs"], ["shell_list", "shells"], ["project_list", "projects"]] as const) {
     const result = CallToolResultSchema.parse(await client.callTool({ name, arguments: {} }));
     const text = result.content[0];
     assert.equal(text?.type, "text");
     assert.deepEqual(JSON.parse(text!.type === "text" ? text!.text : "")[key], []);
+    assert.deepEqual(result.structuredContent, { [key]: [] });
   }
   const executed = CallToolResultSchema.parse(await client.callTool({
     name: "execute", arguments: { code: '(await tools.run_command({command:"echo execute-http"})).content[0].text' },
@@ -56,12 +63,14 @@ try {
   const first = opened.content[0];
   assert.equal(first?.type, "text");
   const shell = JSON.parse(first!.type === "text" ? first!.text : "") as ShellSnapshot;
+  assert.deepEqual(opened.structuredContent, shell);
   const started = CallToolResultSchema.parse(await client.callTool({
     name: "run_command", arguments: { command: "echo ready; sleep 30", background: true },
   }));
   assert.ok(!started.isError);
   const jobText = started.content[0];
   const job = JSON.parse(jobText!.type === "text" ? jobText!.text : "") as JobStatus;
+  assert.deepEqual(started.structuredContent, job);
   assert.equal(job.state, "running");
   await client.close();
 
@@ -79,7 +88,9 @@ try {
     assert.ok(!result.isError, JSON.stringify(result));
     const text = result.content[0];
     assert.equal(text?.type, "text");
-    return JSON.parse(text!.type === "text" ? text!.text : "") as ShellSnapshot;
+    const value = JSON.parse(text!.type === "text" ? text!.text : "") as ShellSnapshot;
+    assert.deepEqual(result.structuredContent, value);
+    return value;
   };
   const json = (result: ReturnType<typeof CallToolResultSchema.parse>) => {
     assert.ok(!result.isError, JSON.stringify(result));
@@ -130,6 +141,9 @@ try {
     code: `JSON.parse((await tools.job_wait({ids:[${JSON.stringify(job.id)}],wait_ms:0})).content[0].text).ready`,
   }));
   assert.equal(viaExecute, false);
+  assert.equal(json(await call("execute", {
+    code: `return (await tools.job_wait({ids:[${JSON.stringify(job.id)}],wait_ms:0})).structuredContent.ready`,
+  })), false);
   for (let i = 0; i < 2; i++) {
     assert.equal(json(await call("job_output", { id: job.id, lines: 1, peek: true })).output, "ready\n");
   }
@@ -171,6 +185,8 @@ try {
   assert.equal(json(await call("job_list", {})).jobs.find((item: JobStatus) => item.id === complete.id).state, "exited");
   const foreground = await call("run_command", { command: "echo foreground" });
   assert.ok(!foreground.isError);
+  assert.equal(foreground.structuredContent?.stdout, "foreground\n");
+  assert.equal(foreground.structuredContent?.exitCode, 0);
   assert.match(foreground.content[0]!.type === "text" ? foreground.content[0]!.text : "", /foreground/);
   const continued = snapshot(CallToolResultSchema.parse(await sse.callTool({
     name: "shell_send", arguments: { shell_id: shell.shell_id, cmd: "echo $RECONNECT_TEST" },

@@ -78,6 +78,8 @@ use regular user tools by default. root access is not implied by having tools or
 
 use `execute` when combining independent tool calls or processing results would reduce unnecessary intermediate output. use the exact `tools.<name>(input)` entries advertised in its catalog.
 
+command, job, shell, and project tools provide `structuredContent` alongside their text blocks; prefer those fields over parsing text. `execute` exposes its final value as `structuredContent.result`. check `isError` first. if `structuredContent.truncated` is true, payload fields are omitted: recover the saved json using `output_path` and check `output_capture_error` before relying on it. the saved file for `execute` contains the original value, without the `result` wrapper.
+
 - use an explicit `return` for the desired result.
 - await every operation whose completion matters. use `Promise.allSettled` for independent work when individual failures should remain visible.
 - do not parallelize dependent operations or conflicting writes. do not switch projects concurrently with work that depends on that selection.

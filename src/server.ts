@@ -24,7 +24,8 @@ import { registerScreenshotTool } from "./screenshot-tool.js";
 import { registerDeviceTools } from "./device-tools.js";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
 import { ProjectContext, projectIdSchema, registerProjectTools } from "./projects.js";
-import { OutputCapture, recoverableText } from "./output-store.js";
+import { OutputCapture } from "./output-store.js";
+import { boundedOutputSchema, jsonResult, jobStatusSchema, shellSnapshotSchema } from "./structured-result.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -53,6 +54,12 @@ interface CommandCompletion {
 }
 
 type CommandResult = SpawnFailure | CommandCompletion;
+
+function commandResult(result: CommandResult): CallToolResult {
+  if (!("exitCode" in result)) return { content: [{ type: "text", text: result.text }], isError: true };
+  const { text, ...fields } = result;
+  return { ...jsonResult(fields, MAX_OUTPUT_BYTES), content: [{ type: "text", text }], isError: !result.ok };
+}
 
 interface Session {
   server: McpServer;
@@ -326,6 +333,8 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     "run_command",
     {
       title: "Run shell command",
+      outputSchema: boundedOutputSchema({ ...jobStatusSchema.shape, ok: z.boolean(), exitCode: z.number().nullable(),
+        signal: z.string().nullable(), timedOut: z.boolean(), durationMs: z.number(), stdout: z.string(), stderr: z.string() }),
       description:
         "Execute a bash command in Termux and return stdout, stderr and the exit code. " +
         "Runs non-interactively with a timeout (default " +
@@ -357,34 +366,36 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
         try {
           const job = await jobs.start(command, path.resolve(expandHome(cwd || "~")), env,
             timeout_ms === undefined ? undefined : Math.min(timeout_ms, MAX_TIMEOUT_MS));
-          return { content: [{ type: "text", text: JSON.stringify(job) }] };
+          return jsonResult(job, MAX_OUTPUT_BYTES);
         } catch (error) {
           return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
         }
       }
       const t = Math.min(timeout_ms || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
       const r = await runCommand(command, { cwd, timeoutMs: t, env });
-      return { content: [{ type: "text", text: r.text }], isError: !r.ok };
+      return commandResult(r);
     },
   );
 
-  const jobResult = async (action: () => unknown | Promise<unknown>): Promise<CallToolResult> => {
+  const jobResult = async (action: () => object | Promise<object>): Promise<CallToolResult> => {
     try {
-      return { content: [{ type: "text", text: JSON.stringify(await action()) }] };
+      return jsonResult(await action(), MAX_OUTPUT_BYTES);
     } catch (error) {
       return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
     }
   };
   const jobId = z.string().min(1).describe("id returned by run_command with background=true");
   server.registerTool("job_list", {
+    outputSchema: boundedOutputSchema({ jobs: z.array(jobStatusSchema.extend({ command: z.string(), cwd: z.string() })) }),
     title: "List background jobs",
     description: "List all retained jobs across clients, including running and exited jobs, with ids, status, original command and cwd. " +
       "Does not consume output. Jobs survive reconnects, not server restarts; completed jobs can be evicted when space is needed. " +
       "Large results may be truncated with output_path for recovery.",
     inputSchema: {},
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async () => ({ content: [{ type: "text", text: recoverableText(JSON.stringify({ jobs: jobs.list() }), MAX_OUTPUT_BYTES) }] }));
+  }, async () => jsonResult({ jobs: jobs.list() }, MAX_OUTPUT_BYTES));
   server.registerTool("job_output", {
+    outputSchema: boundedOutputSchema({ ...jobStatusSchema.shape, output: z.string() }),
     title: "Read background job output",
     description: "Read unread merged stdout/stderr, including partial lines, and return job status. " +
       "Set peek=true to inspect without consuming output or resetting dropped_bytes; default false consumes. " +
@@ -398,6 +409,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   }, ({ id, lines, peek }) => jobResult(() => jobs.get(id).read(lines ?? 100, peek)));
 
   server.registerTool("job_kill", {
+    outputSchema: boundedOutputSchema(jobStatusSchema.shape),
     title: "Stop background job",
     description: "Send SIGTERM to the job's entire process group, escalating to SIGKILL after 3 seconds. " +
       "Returns current status immediately; use job_wait to confirm termination. Output remains readable. " +
@@ -407,6 +419,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   }, ({ id }) => jobResult(() => { const job = jobs.get(id); job.kill(); return job.status(); }));
 
   server.registerTool("job_wait", {
+    outputSchema: boundedOutputSchema({ ready: z.boolean(), jobs: z.array(jobStatusSchema) }),
     title: "Wait for background jobs",
     description: "Wait for one or more jobs to exit. mode=all (default) waits for all; any waits for at least one, " +
       "including already completed jobs. Returns ready and a status for every requested id. " +
@@ -422,7 +435,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
 
   const shellResult = async (action: () => Promise<ShellSnapshot>): Promise<CallToolResult> => {
     try {
-      return { content: [{ type: "text", text: JSON.stringify(await action()) }] };
+      return jsonResult(await action(), MAX_OUTPUT_BYTES);
     } catch (error) {
       return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
     }
@@ -432,6 +445,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     .describe("Wait up to this many milliseconds, at most 30000. Does not kill the command.");
 
   server.registerTool("shell_list", {
+    outputSchema: boundedOutputSchema({ shells: z.array(shellSnapshotSchema.omit({ output: true }).extend({ root: z.boolean(), initial_cwd: z.string().nullable() })) }),
     title: "List persistent shells",
     description: "List all retained user and root shells across clients, including idle, running and exited shells, with ids and state. " +
       "initial_cwd is the requested starting directory, not the current directory; null means the root shell's default home. " +
@@ -439,9 +453,10 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
       "Large results may be truncated with output_path for recovery.",
     inputSchema: {},
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async () => ({ content: [{ type: "text", text: recoverableText(JSON.stringify({ shells: shells.list() }), MAX_OUTPUT_BYTES) }] }));
+  }, async () => jsonResult({ shells: shells.list() }, MAX_OUTPUT_BYTES));
 
   server.registerTool("shell_open", {
+    outputSchema: boundedOutputSchema(shellSnapshotSchema.shape),
     title: "Open persistent shell",
     description: "Open a pipe-based user shell, preserving cwd, variables and functions across sends. " +
       "Returns shell_id. Survives client reconnects, not server restarts. No PTY or interactive stdin. " +
@@ -455,6 +470,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   }, ({ cwd, env, project_id }) => shellResult(() => shells.open(context.resolve(cwd, project_id, os.homedir()), env)));
 
   server.registerTool("shell_open_root", {
+    outputSchema: boundedOutputSchema(shellSnapshotSchema.shape),
     title: "Open persistent root shell",
     description: "Check root access on every invocation, then open a pipe-based UID 0 shell via tsu. " +
       "Returns shell_id for shell_send/read/interrupt. No PTY or interactive stdin. " +
@@ -472,6 +488,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     env, preserve_env ? "sudo" : "tsu")));
 
   server.registerTool("shell_send", {
+    outputSchema: boundedOutputSchema(shellSnapshotSchema.shape),
     title: "Send shell command",
     description: "Run cmd in an idle persistent shell. Returns after completion or wait_ms (default 1000), " +
       "leaving long commands running with no timeout. Rejects sends while busy. Returns state, exit_code " +
@@ -482,6 +499,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   }, ({ shell_id, cmd, wait_ms }) => shellResult(() => shells.get(shell_id).send(cmd, wait_ms ?? 1000)));
 
   server.registerTool("shell_read", {
+    outputSchema: boundedOutputSchema(shellSnapshotSchema.shape),
     title: "Read shell output",
     description: "Read up to lines (default 100) of unread merged stdout/stderr, including partial lines. " +
       "Set peek=true to inspect without consuming output or resetting dropped_bytes; default false consumes. " +
@@ -497,6 +515,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
   }, ({ shell_id, lines, wait_ms, peek }) => shellResult(() => shells.get(shell_id).read(lines ?? 100, wait_ms ?? 0, peek)));
 
   server.registerTool("shell_interrupt", {
+    outputSchema: boundedOutputSchema(shellSnapshotSchema.shape),
     title: "Interrupt shell command",
     description: "Send SIGINT to the shell process group (like Ctrl-C), keeping the shell usable. " +
       "Wait up to wait_ms (default 1000) and consume up to 100 output lines. " +
@@ -509,6 +528,8 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     "run_root_command",
     {
       title: "Run shell command as root",
+      outputSchema: boundedOutputSchema({ ok: z.boolean(), exitCode: z.number().nullable(), signal: z.string().nullable(),
+        timedOut: z.boolean(), durationMs: z.number(), stdout: z.string(), stderr: z.string() }),
       description:
         "Execute a bash command as UID 0 via `tsu` (Termux su). " +
         "By default (preserve_env=false) it behaves like plain `tsu`: PREFIX, PATH and TERM are kept, " +
@@ -549,7 +570,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
         env,
         asRoot: preserve_env ? "sudo" : "tsu",
       });
-      return { content: [{ type: "text", text: r.text }], isError: !r.ok };
+      return commandResult(r);
     },
   );
 

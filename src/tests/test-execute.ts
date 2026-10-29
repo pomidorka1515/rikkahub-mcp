@@ -10,8 +10,9 @@ import { registerExecuteTool } from "../execute-tool.js";
 
 const buildTools = async () => {
   const server = new McpServer({ name: "execute-test", version: "1" });
-  server.registerTool("echo", { inputSchema: { value: z.string() } }, async ({ value }) => ({
+  server.registerTool("echo", { inputSchema: { value: z.string() }, outputSchema: { value: z.string() } }, async ({ value }) => ({
     content: [{ type: "text" as const, text: value }],
+    structuredContent: { value },
   }));
   server.registerTool("fail", { inputSchema: {} }, async () => ({
     content: [{ type: "text" as const, text: "expected failure" }], isError: true,
@@ -38,6 +39,14 @@ try {
     const result = CallToolResultSchema.parse(await client.callTool({ name: "execute", arguments: { code } }));
     const text = result.content.map(item => item.type === "text" ? item.text : "").join("\n");
     assert.equal(Boolean(result.isError), error, text);
+    if (!error && !result.structuredContent?.truncated) {
+      assert.deepEqual(result.structuredContent, { result: JSON.parse(text) });
+    }
+    if (result.structuredContent?.truncated) {
+      assert.equal(typeof result.structuredContent.output_path, "string");
+      assert.ok(!("result" in result.structuredContent));
+      assert.ok(JSON.stringify(result.structuredContent).length < 1024);
+    }
     return text;
   };
   assert.equal(await call("1 + 2"), "3");
@@ -47,6 +56,7 @@ try {
   assert.equal(await call("[typeof process, typeof require, typeof setTimeout, typeof console]"), '["undefined","undefined","undefined","undefined"]');
   assert.equal(await call("typeof tools.execute"), '"undefined"');
   assert.equal(await call('(await tools.echo({value:"hello"})).content[0].text'), '"hello"');
+  assert.equal(await call('(await tools.echo({value:"hello"})).structuredContent.value'), '"hello"');
   assert.equal(await call('(await tools.fail({})).isError'), "true");
   assert.equal(await call('(await tools.echo({value:3})).isError'), "true");
   assert.equal(await call('const r = await Promise.allSettled([tools.echo({value:"a"}), Promise.resolve().then(() => tools.missing({}))]); r.map(x => x.status)'), '["fulfilled","rejected"]');

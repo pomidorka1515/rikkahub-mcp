@@ -43,7 +43,13 @@ try {
     const body = await response.json() as { result: unknown };
     const result = CallToolResultSchema.parse(body.result);
     assert.equal(Boolean(result.isError), error, JSON.stringify(result));
-    return result.content.map(item => item.type === "text" ? item.text : "").join("\n");
+    const text = result.content.map(item => item.type === "text" ? item.text : "").join("\n");
+    if (!error && ["project_open", "project_info", "project_list"].includes(name)) {
+      assert.deepEqual(result.structuredContent, JSON.parse(text));
+    }
+    if (!error && name === "project_close") assert.deepEqual(result.structuredContent, { project_id: args.project_id, released: true });
+    if (error && name.startsWith("project_")) assert.equal(result.structuredContent, undefined);
+    return text;
   };
   const a = path.join(temp, "project a");
   const b = path.join(temp, "project b");

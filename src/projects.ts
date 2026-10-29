@@ -7,13 +7,18 @@ import { TextDecoder } from "node:util";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { recoverableText } from "./output-store.js";
+import { boundedOutputSchema, jsonResult } from "./structured-result.js";
 
 export const projectIdSchema = z.string().min(1).optional().describe(
   "Project id returned by project_open in this chat. Relative paths and default directories use that project. No shared active project.",
 );
 
 const roots = new Map<string, string>();
+const projectOutputSchema = boundedOutputSchema({
+  project_id: z.string(), path: z.string(),
+  instructions: z.array(z.object({ path: z.string(), content: z.string() })),
+  missing: z.array(z.string()), guidance: z.string(),
+});
 const expandHome = (value: string): string => value === "~" ? os.homedir()
   : value.startsWith("~/") ? path.join(os.homedir(), value.slice(2)) : value;
 
@@ -76,10 +81,11 @@ async function describeProject(root: string, id: string, maxBytes: number): Prom
 
 export function registerProjectTools(server: McpServer, maxBytes: number, context = new ProjectContext()): void {
   const result = async (action: () => Promise<string>): Promise<CallToolResult> => {
-    try { return { content: [{ type: "text", text: await action() }] }; }
+    try { return jsonResult(JSON.parse(await action()) as object, maxBytes); }
     catch (error) { return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] }; }
   };
   server.registerTool("project_open", {
+    outputSchema: projectOutputSchema,
     title: "Open project",
     description: "Open a project directory and automatically return both root AGENTS.md and CLAUDE.md as project instructions. " +
       "Save the returned project_id in this chat and pass it to file/search/command tools or execute. " +
@@ -97,14 +103,16 @@ export function registerProjectTools(server: McpServer, maxBytes: number, contex
     return text;
   }));
   server.registerTool("project_list", {
+    outputSchema: boundedOutputSchema({ projects: z.array(z.object({ project_id: z.string(), path: z.string() })) }),
     title: "List project handles",
     description: "List all retained project handles and canonical paths across clients, including duplicate paths. " +
       "Handles survive reconnects but not server restarts. Does not select a project or reload instructions; use project_info for that. " +
       "Large results may be truncated with output_path for recovery.",
     inputSchema: {},
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, () => result(async () => recoverableText(JSON.stringify({ projects: [...roots].map(([project_id, path]) => ({ project_id, path })) }), maxBytes)));
+  }, () => result(async () => JSON.stringify({ projects: [...roots].map(([project_id, path]) => ({ project_id, path })) })));
   server.registerTool("project_info", {
+    outputSchema: projectOutputSchema,
     title: "Read project context",
     description: "Return the project directory and reload both root instruction files. Use after context loss or instruction changes.",
     inputSchema: { project_id: projectIdSchema },
@@ -115,13 +123,18 @@ export function registerProjectTools(server: McpServer, maxBytes: number, contex
     return describeProject(context.resolve(undefined, id), id, maxBytes);
   }));
   server.registerTool("project_close", {
+    outputSchema: boundedOutputSchema({ project_id: z.string(), released: z.boolean() }),
     title: "Release project handle",
     description: "Forget a project handle without deleting files or stopping existing jobs/shells. Future calls with this id fail.",
     inputSchema: { project_id: z.string().min(1) },
     annotations: { readOnlyHint: false, destructiveHint: false },
-  }, ({ project_id }) => result(async () => {
-    context.resolve(undefined, project_id);
-    roots.delete(project_id);
-    return "project handle released";
-  }));
+  }, async ({ project_id }) => {
+    try {
+      context.resolve(undefined, project_id);
+      roots.delete(project_id);
+      return jsonResult({ project_id, released: true }, maxBytes, "project handle released");
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
+    }
+  });
 }
