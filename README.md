@@ -52,6 +52,7 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `run_root_command` | same, but as UID 0 via `tsu` (`preserve_env` optional) |
 | `screenshot` | capture the current phone display as a native-resolution png image; requires root via `tsu` |
 | `shell_open` | open a persistent user shell (`cwd`, `env` optional) → `shell_id` |
+| `shell_open_root` | check root access, then open a persistent root shell (`cwd`, `env`, `preserve_env` optional) → `shell_id` |
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
 | `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
 | `shell_interrupt` | interrupt the active command with `{shell_id, wait_ms?}`, keeping the shell usable |
@@ -68,7 +69,7 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
 
-`screenshot` and `run_root_command` check root access when invoked and return
+`screenshot`, `run_root_command` and `shell_open_root` check root access when invoked and return
 `termux does not have root access` if access is unavailable. screenshot capture
 stays in memory, with no resizing or saved file (10-second capture timeout,
 32 mib image limit). call `screenshot` directly, not through `execute`, so the
@@ -310,6 +311,19 @@ shell_read      {"shell_id":"…","lines":100,"wait_ms":30000}
 shell_interrupt {"shell_id":"…"}                     → if you want to cancel
 shell_send      {"shell_id":"…","cmd":"exit"}        → when finished
 ```
+
+regular `run_command` calls (including background jobs) and regular shell sends
+reject explicit `sudo`, `su` and `tsu` names, including paths and quoted names.
+the conservative check also rejects these names in command text or supplied
+environment values, even when used as data. regular `shell_open` cannot select
+these programs as its shell. use `run_root_command` or `shell_open_root` instead.
+this is a tool-level policy, not a security sandbox: scripts, interpreters and
+dynamically constructed commands are not confined by an operating-system boundary.
+
+`shell_open_root` uses the same uncached root-access check as `run_root_command`.
+it defaults to `tsu` and the root home; `preserve_env=true` uses `sudo -E`.
+root and user shells share the 16-shell limit and the same
+`shell_send`, `shell_read` and `shell_interrupt` tools.
 
 * `cd`, exports and functions persist within each shell. multiple shells are
   independent; at most 16 are retained. exited shells remain readable until

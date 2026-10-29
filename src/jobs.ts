@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
+import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
 
 export interface JobStatus {
   id: string;
@@ -110,6 +111,9 @@ export class JobManager {
   constructor(private shell: string, private maxBytes: number, private maxJobs = 32) {}
 
   async start(command: string, cwd: string, env: Record<string, string> = {}, timeoutMs?: number): Promise<JobStatus> {
+    requireRegularCommand(command);
+    requireRegularCommand(this.shell);
+    requireRegularEnvironment({ ...process.env, ...env });
     if (this.jobs.size >= this.maxJobs) {
       for (const [id, job] of this.jobs) {
         if (job.status().state === "exited") { this.jobs.delete(id); break; }

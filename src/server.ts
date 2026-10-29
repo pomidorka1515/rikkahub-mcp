@@ -21,6 +21,7 @@ import { JobManager } from "./jobs.js";
 import { registerExecuteTool } from "./execute-tool.js";
 import { requireRootAccess } from "./root-access.js";
 import { registerScreenshotTool } from "./screenshot-tool.js";
+import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -197,6 +198,11 @@ function runCommand(command: string, { cwd, timeoutMs, env, asRoot = false }: Co
     const useCwd = cwd ? path.resolve(expandHome(cwd)) : os.homedir();
     let child: ChildProcessByStdio<Writable | null, Readable, Readable>;
     try {
+      if (!asRoot) {
+        requireRegularCommand(command);
+        requireRegularCommand(SHELL);
+        requireRegularEnvironment({ ...process.env, ...env });
+      }
       if (!asRoot && !fs.existsSync(useCwd)) throw new Error(`cwd does not exist: ${useCwd}`);
       if (asRoot) {
         const script = rootScript(command, { cwd, env });
@@ -324,7 +330,7 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
         "Shared storage is at ~/storage/shared or /sdcard. Commands run in bash, " +
         "non-interactively. Use run_command with background=true for app servers and background tasks; " +
         "save the job id, inspect job_output, wait for completion with job_wait, and stop with job_kill. " +
-        "Use shell_open/send/read/interrupt " +
+        "Use shell_open/send/read/interrupt (shell_open_root for checked root access) " +
          "for persistent shells and long builds. Save shell_id; check state and exit_code before assuming success. " +
          "Read files before editing. Prefer edit for exact replacements, patch for multi-file diffs (add/update/move/delete), " +
          "and write for new files or full replacements; do not use shell commands to edit files when these tools suffice.",
@@ -342,7 +348,8 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
         "Pipes, redirects, &&, globs all work. Output is capped at " +
         `${Math.round(MAX_OUTPUT_BYTES / 1024)} KiB per stream. ` +
         "With background=true returns a job id immediately instead; no timeout unless timeout_ms is set. " +
-        "Use job_output, job_wait and job_kill to manage it. Background stdout/stderr share a rolling buffer.",
+        "Use job_output, job_wait and job_kill to manage it. Background stdout/stderr share a rolling buffer. " +
+        "sudo, su and tsu are blocked; use run_root_command or shell_open_root for root access.",
       inputSchema: {
         command: z.string().min(1).describe("The command line to run, e.g. `ls -la ~/projects`"),
         cwd: z.string().optional().describe("Working directory (default: home). ~ is expanded."),
@@ -421,7 +428,7 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
     }
   };
-  const shellId = z.string().min(1).describe("shell_id returned by shell_open");
+  const shellId = z.string().min(1).describe("shell_id returned by shell_open or shell_open_root");
   const waitMs = z.number().int().min(0).max(30_000).optional()
     .describe("Wait up to this many milliseconds, at most 30000. Does not kill the command.");
 
@@ -429,13 +436,28 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
     title: "Open persistent shell",
     description: "Open a pipe-based user shell, preserving cwd, variables and functions across sends. " +
       "Returns shell_id. Survives client reconnects, not server restarts. No PTY or interactive stdin. " +
-      "At most 16 shells; send 'exit' when finished.",
+      "At most 16 shells; send 'exit' when finished. sudo, su and tsu are blocked; use shell_open_root for root.",
     inputSchema: {
       cwd: z.string().optional().describe("Working directory (default home); ~ is expanded"),
       env: z.record(z.string(), z.string()).optional().describe("Extra environment variables"),
     },
     annotations: { openWorldHint: true, readOnlyHint: false },
   }, ({ cwd, env }) => shellResult(() => shells.open(path.resolve(expandHome(cwd || "~")), env)));
+
+  server.registerTool("shell_open_root", {
+    title: "Open persistent root shell",
+    description: "Check root access on every invocation, then open a pipe-based UID 0 shell via tsu. " +
+      "Returns shell_id for shell_send/read/interrupt. No PTY or interactive stdin. " +
+      "Shares the 16-shell limit with user shells. Send 'exit' when finished. " +
+      "preserve_env=true uses sudo -E, matching run_root_command.",
+    inputSchema: {
+      cwd: z.string().optional().describe("Working directory (default: root shell's home); ~ is expanded"),
+      env: z.record(z.string(), z.string()).optional().describe("Extra environment variables"),
+      preserve_env: z.boolean().optional().describe("Keep the full Termux environment; default false"),
+    },
+    annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
+  }, ({ cwd, env, preserve_env }) => shellResult(() => shells.openRoot(
+    cwd === undefined ? undefined : path.resolve(expandHome(cwd)), env, preserve_env ? "sudo" : "tsu")));
 
   server.registerTool("shell_send", {
     title: "Send shell command",

@@ -40,7 +40,7 @@ try {
   clients.push(client);
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers } }));
   const names = (await client.listTools()).tools.map((tool) => tool.name);
-  for (const name of ["execute", "grep", "glob", "shell_open", "shell_send", "shell_read", "shell_interrupt", "job_output", "job_wait", "job_kill"]) assert.ok(names.includes(name));
+  for (const name of ["execute", "grep", "glob", "shell_open", "shell_open_root", "shell_send", "shell_read", "shell_interrupt", "job_output", "job_wait", "job_kill"]) assert.ok(names.includes(name));
   const executed = CallToolResultSchema.parse(await client.callTool({
     name: "execute", arguments: { code: '(await tools.run_command({command:"echo execute-http"})).content[0].text' },
   }));
@@ -81,6 +81,19 @@ try {
     assert.equal(text?.type, "text");
     return JSON.parse(text!.type === "text" ? text!.text : "");
   };
+  for (const command of ["sudo id", "su -c id", "/system/bin/tsu", "true; s'u'do id"]) {
+    for (const background of [false, true]) {
+      const blocked = await call("run_command", { command, background });
+      assert.ok(blocked.isError);
+      assert.match(blocked.content[0]!.type === "text" ? blocked.content[0]!.text : "", /blocked/);
+    }
+    assert.ok((await call("shell_send", { shell_id: shell.shell_id, cmd: command })).isError);
+  }
+  assert.ok((await call("shell_open", { env: { BASH_ENV: "/tmp/tsu" } })).isError);
+  const blockedExecute = json(await call("execute", {
+    code: '(await tools.run_command({command:"tsu"})).isError',
+  }));
+  assert.equal(blockedExecute, true);
   assert.equal(json(await call("job_wait", { ids: [job.id], wait_ms: 20 })).ready, false);
   const viaExecute = json(await call("execute", {
     code: `JSON.parse((await tools.job_wait({ids:[${JSON.stringify(job.id)}],wait_ms:0})).content[0].text).ready`,
