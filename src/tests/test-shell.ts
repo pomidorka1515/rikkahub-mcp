@@ -65,6 +65,9 @@ try {
   result = await shell.send("printf '%2000s' x", 1000);
   assert.ok(result.dropped_bytes > 0);
   assert.ok(Buffer.byteLength(result.output) <= 1024);
+  assert.ok(result.output_path);
+  assert.ok((await readFile(result.output_path, "utf8")).endsWith("x"));
+  assert.equal(result.output_capture_error, undefined);
   result = await shell.send("exit 7", 1000);
   assert.equal(result.state, "exited");
   assert.equal(result.exit_code, 7);

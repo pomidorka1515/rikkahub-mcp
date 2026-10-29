@@ -5,8 +5,9 @@ import type { Readable, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { requireRootAccess, ROOT_ACCESS_ERROR, type RootMode } from "./root-access.js";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
+import { OutputCapture, type OutputMetadata } from "./output-store.js";
 
-export interface ShellSnapshot {
+export interface ShellSnapshot extends OutputMetadata {
   shell_id: string;
   state: "idle" | "running" | "exited";
   exit_code: number | null;
@@ -30,9 +31,11 @@ class PersistentShell {
   signal: NodeJS.Signals | null = null;
   private output = "";
   private dropped = 0;
+  private capture: OutputCapture;
 
   constructor(shell: string, cwd: string | undefined, env: Record<string, string>, private maxBytes: number,
     private rootMode?: RootMode) {
+    this.capture = new OutputCapture(maxBytes);
     // A trapped INT keeps the shell alive; external foreground commands reset
     // the trap and receive SIGINT along with the rest of this process group.
     const marker = `__mcp_status_${randomUUID()}__`;
@@ -99,6 +102,7 @@ class PersistentShell {
       this.signal = signal;
       this.events.emit("change");
     });
+    this.child.on("close", () => this.capture.finish());
     if (rootMode) {
       const setup = ["[ \"$(id -u)\" = 0 ] || exit 1"];
       for (const [key, value] of Object.entries(env)) {
@@ -113,6 +117,7 @@ class PersistentShell {
 
   private append(text: string): void {
     if (!text) return;
+    this.capture.append(text);
     const bytes = Buffer.from(this.output + text);
     let start = Math.max(0, bytes.length - this.maxBytes);
     while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
@@ -177,7 +182,7 @@ class PersistentShell {
     const dropped = this.dropped;
     this.dropped = 0;
     return { shell_id: this.id, state: this.state, exit_code: this.exitCode,
-      signal: this.signal, output, buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: dropped };
+      signal: this.signal, output, buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: dropped, ...this.capture.metadata() };
   }
 }
 

@@ -23,6 +23,7 @@ import { requireRootAccess } from "./root-access.js";
 import { registerScreenshotTool } from "./screenshot-tool.js";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
 import { ProjectContext, projectIdSchema, registerProjectTools } from "./projects.js";
+import { OutputCapture } from "./output-store.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -134,37 +135,11 @@ function authorized(req: IncomingMessage, url: URL): boolean {
 
 /* --------------------------------------------------------------- utilities */
 
-const TRUNC = "\n…[output truncated]";
-
-function utf8Truncate(buf: Buffer): string {
-  // cut on a byte boundary without splitting a multi-byte character.
-  let s = buf.toString("utf8");
-  if (buf.length >= MAX_OUTPUT_BYTES && s.length) {
-    s = Buffer.from(buf).subarray(0, MAX_OUTPUT_BYTES).toString("utf8");
-    // drop a possible partial trailing character
-    s = s.replace(/\uFFFD$/, "");
-    s += TRUNC;
-  }
-  return s;
-}
-
 function collect(stream: Readable): () => string {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  let truncated = false;
-  stream.on("data", (c: Buffer) => {
-    if (truncated) return;
-    const room = MAX_OUTPUT_BYTES + 1 - size;
-    if (c.length > room) {
-      chunks.push(c.subarray(0, room));
-      size += room;
-      truncated = true;
-      return;
-    }
-    chunks.push(c);
-    size += c.length;
-  });
-  return () => utf8Truncate(Buffer.concat(chunks));
+  const capture = new OutputCapture(MAX_OUTPUT_BYTES);
+  stream.on("data", (chunk: Buffer) => capture.append(chunk));
+  stream.on("end", () => capture.finish());
+  return () => capture.text();
 }
 
 /** single-quote a string for safe embedding in a shell script */
@@ -340,7 +315,9 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
           "Before working on a project, call project_open with its directory and follow the returned AGENTS.md and CLAUDE.md " +
           "as project guidance, subject to higher-priority instructions. Save project_id in this chat and pass it to project tools " +
           "or execute; there is no shared active project. When switching, stop applying the previous project's instructions. " +
-          "Use project_info to reload instructions after context loss or changes.",
+           "Use project_info to reload instructions after context loss or changes. " +
+           "Truncated command/web/execute output and large job/shell transcripts provide output_path for recovery with read_file or grep. " +
+           "Check output_capture_error or capture warnings: disk retention is bounded and saved output may be incomplete.",
     },
   );
 
@@ -353,7 +330,7 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
         "Runs non-interactively with a timeout (default " +
         `${DEFAULT_TIMEOUT_MS / 1000}s, max ${MAX_TIMEOUT_MS / 1000}s). ` +
         "Pipes, redirects, &&, globs all work. Output is capped at " +
-        `${Math.round(MAX_OUTPUT_BYTES / 1024)} KiB per stream. ` +
+         `${Math.round(MAX_OUTPUT_BYTES / 1024)} KiB per stream; truncated streams provide an output_path to the saved output. ` +
         "With background=true returns a job id immediately instead; no timeout unless timeout_ms is set. " +
         "Use job_output, job_wait and job_kill to manage it. Background stdout/stderr share a rolling buffer. " +
         "sudo, su and tsu are blocked; use run_root_command or shell_open_root for root access.",
@@ -402,7 +379,8 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     title: "Read background job output",
     description: "Consume unread merged stdout/stderr, including partial lines, and return job status. " +
       "Defaults to 100 lines, maximum 10000. The rolling buffer retains MCP_MAX_OUTPUT_BYTES; " +
-      "dropped_bytes reports overflow since the last read. Jobs survive reconnects, not server restarts. " +
+      "dropped_bytes reports overflow since the last read. Large transcripts provide output_path for recovery; " +
+      "output_capture_error means capture is incomplete. Jobs survive reconnects, not server restarts. " +
       "At most 32 jobs are retained; the oldest completed job is evicted when space is needed.",
     inputSchema: { id: jobId, lines: z.number().int().min(1).max(10_000).optional() },
     annotations: { readOnlyHint: false, destructiveHint: false },
@@ -487,7 +465,8 @@ async function buildServer(includeExecute = true, defaultProjectId?: string): Pr
     description: "Consume up to lines (default 100) of unread merged stdout/stderr, including partial lines. " +
       "wait_ms defaults to 0; when empty, optionally wait for output or command completion. " +
       "state=idle means the last command finished; exit_code is its status. " +
-      "The buffer keeps the most recent output up to MCP_MAX_OUTPUT_BYTES; dropped_bytes reports overflow.",
+      "The buffer keeps the most recent output up to MCP_MAX_OUTPUT_BYTES; dropped_bytes reports overflow. " +
+      "Large lifetime transcripts provide output_path for recovery; output_capture_error means capture is incomplete.",
     inputSchema: {
       shell_id: shellId, lines: z.number().int().min(1).max(10_000).optional(), wait_ms: waitMs,
     },

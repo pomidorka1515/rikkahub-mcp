@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import { readFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -59,7 +60,11 @@ try {
   '{"ok":true,"status":201,"header":"yes","data":{"method":"POST"}}');
   assert.match(await call('await fetch("file:///etc/passwd")', true), /http/);
   assert.match(await call(`await fetch(${JSON.stringify(url + "/large")})`, true), /5 MiB/);
-  assert.match(await call('"x".repeat(2000)'), /output truncated/);
+  const large = await call('"x".repeat(2000)');
+  assert.match(large, /output truncated/);
+  const saved = /\noutput_path: (.+)\n/.exec(large)?.[1];
+  assert.ok(saved);
+  assert.equal(JSON.parse(await readFile(saved, "utf8")), "x".repeat(2000));
   // an unending promise must not hold the server indefinitely, including cpu loops.
   const stuck = call("while (true) {}", true);
   assert.equal(await call("42"), "42");

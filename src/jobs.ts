@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
 import { requireRegularCommand, requireRegularEnvironment } from "./command-policy.js";
+import { OutputCapture, type OutputMetadata } from "./output-store.js";
 
-export interface JobStatus {
+export interface JobStatus extends OutputMetadata {
   id: string;
   state: "running" | "exited";
   exit_code: number | null;
@@ -29,9 +30,11 @@ class Job {
   private timedOut = false;
   private timeout: NodeJS.Timeout | undefined;
   private escalation: NodeJS.Timeout | undefined;
+  private capture: OutputCapture;
 
   constructor(shell: string, command: string, cwd: string, env: Record<string, string>,
     private maxBytes: number, private changed: () => void, timeoutMs?: number) {
+    this.capture = new OutputCapture(maxBytes);
     this.child = spawn(shell, ["-c", command], {
       cwd, env: { ...process.env, ...env }, detached: true, stdio: ["ignore", "pipe", "pipe"],
     });
@@ -43,6 +46,7 @@ class Job {
     this.child.on("error", (error) => { this.error = error.message; });
     // close, unlike exit, means the output pipes have also been drained.
     this.child.on("close", (code, signal) => {
+      this.capture.finish();
       this.exitCode = code;
       this.signal = signal;
       this.ended = Date.now();
@@ -61,6 +65,7 @@ class Job {
 
   private append(text: string): void {
     if (!text) return;
+    this.capture.append(text);
     const bytes = Buffer.from(this.output + text);
     let start = Math.max(0, bytes.length - this.maxBytes);
     while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
@@ -72,7 +77,7 @@ class Job {
     return { id: this.id, state: this.ended === undefined ? "running" : "exited",
       exit_code: this.exitCode, signal: this.signal, timed_out: this.timedOut, error: this.error,
       duration_ms: (this.ended ?? Date.now()) - this.started,
-      buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: this.dropped };
+      buffered_bytes: Buffer.byteLength(this.output), dropped_bytes: this.dropped, ...this.capture.metadata() };
   }
 
   read(lines: number): JobStatus & { output: string } {

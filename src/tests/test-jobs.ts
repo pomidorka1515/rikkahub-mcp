@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import os from "node:os";
+import { readFile } from "node:fs/promises";
 import { JobManager } from "../jobs.js";
 
 const jobs = new JobManager(process.env.MCP_SHELL || "bash", 128);
@@ -34,7 +35,22 @@ try {
   const output = jobs.get(overflow.id).read(100);
   assert.equal(output.output, "🙂".repeat(32));
   assert.equal(output.dropped_bytes, 272);
+  assert.ok(output.output_path);
+  assert.equal(await readFile(output.output_path, "utf8"), "🙂".repeat(100));
+  assert.equal(output.output_capture_error, undefined);
   assert.equal(jobs.get(overflow.id).read(100).dropped_bytes, 0);
+
+  // consuming the rolling buffer must not consume the saved lifetime transcript.
+  const streaming = await jobs.start("printf 'a%.0s' {1..80}; sleep 0.3; printf 'b%.0s' {1..80}", cwd);
+  for (let i = 0; i < 100 && !jobs.get(streaming.id).status().buffered_bytes; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(jobs.get(streaming.id).read(100).output, "a".repeat(80));
+  await jobs.wait([streaming.id], "all", 5000);
+  const transcript = jobs.get(streaming.id).read(100);
+  assert.equal(transcript.dropped_bytes, 0);
+  assert.ok(transcript.output_path);
+  assert.equal(await readFile(transcript.output_path, "utf8"), "a".repeat(80) + "b".repeat(80));
 
   const partial = await jobs.start("printf partial", cwd);
   await jobs.wait([partial.id], "all", 5000);

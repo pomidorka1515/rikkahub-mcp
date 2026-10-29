@@ -5,6 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { projectIdSchema } from "./projects.js";
+import { recoverableText } from "./output-store.js";
 
 const TIMEOUT_MS = 30_000;
 const MAX_FETCH_BYTES = 5 * 1024 * 1024;
@@ -71,6 +72,7 @@ export async function registerExecuteTool(
       "fetch(url, {method?, headers?, body?, redirect?}) supports HTTP(S), returning ok/status/statusText/url/redirected/headers.get/text()/json(). " +
       "No imports, filesystem, process, shell or timers except through tools. Fresh runtime per call; 30s deadline, 32 MiB JS memory. " +
       "Pending work is abandoned on completion; tool side effects are not rolled back. No recursive execute. " +
+      "Truncated final output provides output_path to the full serialized result; nested tools may provide their own output paths. " +
       "Set project_id to default nested file/search/command calls to that project; individual nested calls may override it. " +
       "project_open returns a handle but does not change the context of this execution; use its id explicitly or in a later execute call. " +
       "Available tools (exact names and JSON input schemas):\n" +
@@ -128,9 +130,7 @@ export async function registerExecuteTool(
         });
       });
       const text = JSON.stringify(value) ?? "null";
-      const bytes = Buffer.from(text);
-      return { content: [{ type: "text", text: bytes.length > maxBytes
-        ? bytes.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD$/, "") + "\n[output truncated]" : text }] };
+      return { content: [{ type: "text", text: recoverableText(text, maxBytes) }] };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
     } finally {

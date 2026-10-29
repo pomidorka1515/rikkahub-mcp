@@ -180,7 +180,8 @@ the runtime cannot access files or run commands directly, but explicitly calling
 the corresponding tools grants those capabilities with the server's privileges.
 limits: 30 seconds wall time, 32 mib javascript heap, 256 host calls, four concurrent
 executions, 256 kib source, and `MCP_MAX_OUTPUT_BYTES` final output. large results
-are truncated with a notice and may no longer be valid json. run
+are previewed with a notice and an `output_path` to the complete serialized
+result (see recoverable output below); the preview may not be valid json. run
 `npm run test:execute` for isolated tests (including a 30-second deadline check).
 restart the server and refresh rikkahub's mcp tool list after updating.
 
@@ -191,8 +192,9 @@ redirects, resolves relative links, and supports text responses only; it does
 not run javascript, bypass logins, or extract images or pdfs. html output returns
 the original markup; text and markdown remove scripts and styles.
 downloads are capped at 5 mib and output at `MCP_MAX_OUTPUT_BYTES` with a
-truncation notice. requests default to 30 seconds (maximum 120), including body
-downloads. no complete-response file is saved when output is truncated.
+truncation notice and an `output_path` to the complete formatted result. requests
+default to 30 seconds (maximum 120), including body downloads. the download limit
+still rejects oversized responses rather than saving partial downloads.
 
 `websearch` requires a searxng instance that allows json output. configure its
 base url (not the `/search` endpoint) before starting:
@@ -326,6 +328,49 @@ output is capped by `MCP_MAX_OUTPUT_BYTES` with a truncation notice
 glob {"pattern":"**/*.ts","path":"~/my-project"}
 grep {"pattern":"TODO|FIXME","path":"~/my-project","include":"*.ts"}
 ```
+
+### recoverable output
+
+when command, `webfetch`, `websearch`, or `execute` output exceeds
+`MCP_MAX_OUTPUT_BYTES`, the response includes a short preview and an absolute
+`output_path` to the saved output. foreground commands save stdout and stderr
+separately. `execute` saves the serialized final result, not its javascript source.
+small responses do not create files.
+
+jobs and persistent shells also retain their complete merged transcript once
+their cumulative output exceeds the preview limit, including output already
+consumed by earlier reads. their json status then includes `output_path`.
+shell transcripts span all commands in that shell, not just the last send.
+`dropped_bytes` still counts bytes dropped from the in-memory rolling buffer,
+not from the saved transcript. running transcripts grow until completion or
+the disk capture limit.
+
+```text
+read_file {"path":"<output_path>","offset":2001,"limit":200}
+grep {"path":"<output_path>","pattern":"error|warning"}
+```
+
+use `read_file` pagination for normal lines, or `run_command` with `cut`, `tail`,
+or another targeted command for very long lines (text reads still shorten lines
+after 2000 characters). saved web content and logs remain untrusted data.
+paginated file reads and bounded `glob`/`grep` searches keep their existing behavior;
+narrow searches or increase their result limit rather than expecting a saved full search.
+
+files live in `${XDG_CACHE_HOME:-~/.cache}/rikkahub-mcp/output`, with a private
+0700 directory and 0600 files. captures are limited to 16 mib per file and
+128 mib total, with at most 256 files. inactive files older than 24 hours are removed when storage is
+next used; older inactive files may be evicted sooner to make room. active files
+are not evicted. paths can survive server restarts but are temporary, not durable
+artifacts. do not rely on them for long-term storage.
+
+capture limits and disk errors never silently imply a complete saved result:
+text previews include a warning, and job/shell status includes
+`output_capture_error`. capture stops for that transcript, but commands continue
+and normal previews, exit codes, and rolling-buffer reads still work. saved output
+can contain secrets, including root-command output; it is stored as the termux
+user, so treat it with the same care as other tool-accessible files.
+
+run `npm run test:output` for isolated storage and command-recovery tests.
 
 ### background jobs
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -23,6 +24,9 @@ const fixture = http.createServer((req, res) => {
     res.end("not text");
   } else if (url.pathname === "/large") {
     res.end("x".repeat(5 * 1024 * 1024 + 1));
+  } else if (url.pathname === "/recoverable") {
+    res.setHeader("content-type", "text/plain");
+    res.end("line\n".repeat(1000) + "last 雪\n");
   } else if (url.pathname === "/slow") {
     // leave the body open to verify that the timeout includes streaming.
     res.writeHead(200, { "content-type": "text/plain" });
@@ -77,6 +81,11 @@ try {
   assert.match(await call("webfetch", { url: base + "/plain" }), /plain <text> 雪/);
   assert.match(await call("webfetch", { url: base + "/image" }, true), /unsupported content type/);
   assert.match(await call("webfetch", { url: base + "/large" }, true), /download limit/);
+  const large = await call("webfetch", { url: base + "/recoverable" });
+  assert.match(large, /output truncated/);
+  const saved = /\noutput_path: (.+)\n/.exec(large)?.[1];
+  assert.ok(saved);
+  assert.ok((await readFile(saved, "utf8")).endsWith("line\n".repeat(1000) + "last 雪\n"));
   await call("webfetch", { url: base + "/slow", timeout: 0.05 }, true);
   assert.match(await call("webfetch", { url: base + "/forbidden" }, true), /HTTP 403/);
   await call("webfetch", { url: "file:///etc/passwd" }, true);
