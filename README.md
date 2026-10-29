@@ -50,6 +50,7 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `job_kill` | stop a job's process group with `{id}` |
 | `job_wait` | wait for one or more jobs with `{ids, mode?, wait_ms?}` |
 | `run_root_command` | same, but as UID 0 via `tsu` (`preserve_env` optional) |
+| `screenshot` | capture the current phone display as a native-resolution png image; requires root via `tsu` |
 | `shell_open` | open a persistent user shell (`cwd`, `env` optional) → `shell_id` |
 | `shell_send` | send `{shell_id, cmd, wait_ms?}`; returns promptly while long commands keep running |
 | `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
@@ -66,6 +67,14 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `websearch` | search a configured searxng instance by `query`; optional `limit`, `timeout` in seconds |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+
+`screenshot` and `run_root_command` check root access when invoked and return
+`termux does not have root access` if access is unavailable. screenshot capture
+stays in memory, with no resizing or saved file (10-second capture timeout,
+32 mib image limit). call `screenshot` directly, not through `execute`, so the
+client receives an mcp image block. rikkahub must forward tool-result images to
+a vision-capable model. the image shows whatever is currently visible, including
+sensitive notifications; protected screens may appear blank.
 
 ### javascript execution
 

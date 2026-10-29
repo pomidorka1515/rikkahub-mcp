@@ -19,6 +19,8 @@ import { registerReadTool } from "./read-tool.js";
 import { registerEditTools } from "./edit-tools.js";
 import { JobManager } from "./jobs.js";
 import { registerExecuteTool } from "./execute-tool.js";
+import { requireRootAccess } from "./root-access.js";
+import { registerScreenshotTool } from "./screenshot-tool.js";
 
 type RootMode = false | "tsu" | "sudo";
 type KillSignal = "SIGTERM" | "SIGKILL";
@@ -496,6 +498,11 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
       annotations: { openWorldHint: true, readOnlyHint: false, destructiveHint: true },
     },
     async ({ command, cwd, timeout_ms, preserve_env, env }): Promise<CallToolResult> => {
+      try {
+        await requireRootAccess(preserve_env ? "sudo" : "tsu");
+      } catch (error) {
+        return { content: [{ type: "text", text: errorMessage(error) }], isError: true };
+      }
       const t = Math.min(timeout_ms || DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
       const r = await runCommand(command, {
         cwd,
@@ -508,6 +515,7 @@ async function buildServer(includeExecute = true): Promise<McpServer> {
   );
 
   registerReadTool(server, MAX_OUTPUT_BYTES);
+  registerScreenshotTool(server);
 
   registerEditTools(server);
 
