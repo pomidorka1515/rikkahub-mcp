@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ShellManager, type ShellSnapshot } from "./persistent-shell.js";
 import { registerSearchTools } from "./search-tools.js";
+import { registerWebTools } from "./web-tools.js";
 import { registerReadTool } from "./read-tool.js";
 import { registerEditTools } from "./edit-tools.js";
 import { JobManager } from "./jobs.js";
@@ -543,6 +544,7 @@ function buildServer(): McpServer {
   );
 
   registerSearchTools(server, MAX_OUTPUT_BYTES);
+  registerWebTools(server, MAX_OUTPUT_BYTES);
   return server;
 }
 

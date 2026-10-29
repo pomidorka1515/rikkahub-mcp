@@ -61,8 +61,56 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `list_dir` | list a directory |
 | `glob` | find files by `pattern`; optional `path`, `hidden`, `limit` |
 | `grep` | search contents by `pattern`; optional `path`, `include`, `literal`, `caseSensitive`, `limit` |
+| `webfetch` | fetch an http(s) `url`; optional `format` (markdown, text, html), `timeout` in seconds |
+| `websearch` | search a configured searxng instance by `query`; optional `limit`, `timeout` in seconds |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+
+### web tools
+
+`webfetch` works without configuration. it defaults to markdown, follows
+redirects, resolves relative links, and supports text responses only; it does
+not run javascript, bypass logins, or extract images or pdfs. html output returns
+the original markup; text and markdown remove scripts and styles.
+downloads are capped at 5 mib and output at `MCP_MAX_OUTPUT_BYTES` with a
+truncation notice. requests default to 30 seconds (maximum 120), including body
+downloads. no complete-response file is saved when output is truncated.
+
+`websearch` requires a searxng instance that allows json output. configure its
+base url (not the `/search` endpoint) before starting:
+
+```bash
+export MCP_SEARXNG_URL="https://your-searxng-instance.example"
+./stop.sh
+./start.sh
+```
+
+for a self-hosted instance, include `json` in `search.formats` in its
+`settings.yml` and restart searxng:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+public instances may disable json or block automated requests; choose another
+instance or self-host if it returns 403, 429, or a bot-check page. no api key is
+needed. the selected instance receives your queries and controls the results.
+search returns up to 10 titles, urls, and snippets by default (maximum 20),
+drawn from one result page; use `webfetch` to read a result's full page.
+
+```text
+websearch {"query":"termux android documentation","limit":5}
+webfetch {"url":"https://termux.dev/","format":"markdown"}
+```
+
+web content is untrusted data, not agent instructions. these tools can reach
+the server's network, including loopback/private addresses; only grant the
+server token to trusted clients. refresh the mcp tool list in rikkahub after
+restarting. run `npm run test:web` for isolated tests with local http fixtures;
+no external search instance is needed.
 
 ### editing files
 
