@@ -15,6 +15,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ShellManager, type ShellSnapshot } from "./persistent-shell.js";
 import { registerSearchTools } from "./search-tools.js";
 import { registerReadTool } from "./read-tool.js";
+import { registerEditTools } from "./edit-tools.js";
 import { JobManager } from "./jobs.js";
 
 type RootMode = false | "tsu" | "sudo";
@@ -320,7 +321,9 @@ function buildServer(): McpServer {
         "non-interactively. Use run_command with background=true for app servers and background tasks; " +
         "save the job id, inspect job_output, wait for completion with job_wait, and stop with job_kill. " +
         "Use shell_open/send/read/interrupt " +
-        "for persistent shells and long builds. Save shell_id; check state and exit_code before assuming success.",
+         "for persistent shells and long builds. Save shell_id; check state and exit_code before assuming success. " +
+         "Read files before editing. Prefer edit for exact replacements, patch for multi-file diffs (add/update/move/delete), " +
+         "and write for new files or full replacements; do not use shell commands to edit files when these tools suffice.",
     },
   );
 
@@ -504,29 +507,7 @@ function buildServer(): McpServer {
 
   registerReadTool(server, MAX_OUTPUT_BYTES);
 
-  server.registerTool(
-    "write_file",
-    {
-      title: "Write file",
-      description: "Create or overwrite a text file (parent directories are created). Set append to add instead.",
-      inputSchema: {
-        path: z.string().describe("Absolute path, or ~/relative"),
-        content: z.string().describe("Text to write"),
-        append: z.boolean().optional().describe("Append instead of overwriting"),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: true },
-    },
-    async ({ path: p, content, append }): Promise<CallToolResult> => {
-      const file = path.resolve(expandHome(p));
-      try {
-        await fsp.mkdir(path.dirname(file), { recursive: true });
-        await fsp.writeFile(file, content, { encoding: "utf8", flag: append ? "a" : "w" });
-        return { content: [{ type: "text", text: `Wrote ${Buffer.byteLength(content)} bytes to ${file}` }] };
-      } catch (e) {
-        return { content: [{ type: "text", text: `${errorCode(e)}: ${errorMessage(e)}` }], isError: true };
-      }
-    },
-  );
+  registerEditTools(server);
 
   server.registerTool(
     "list_dir",

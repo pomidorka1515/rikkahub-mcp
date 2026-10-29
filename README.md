@@ -54,12 +54,75 @@ or root needed), or `npm run test:search` for isolated grep/glob MCP tests.
 | `shell_read` | consume unread output with `{shell_id, lines?, wait_ms?}` |
 | `shell_interrupt` | interrupt the active command with `{shell_id, wait_ms?}`, keeping the shell usable |
 | `read_file` | read numbered text lines with optional `offset`, `limit`, and `max_bytes` |
+| `edit` | replace exact text with `{path, oldString, newString, replaceAll?}` |
+| `write` | create or fully replace a text file with `{path, content}` |
+| `patch` | apply a multi-file add/update/move/delete diff with `{patchText}` |
 | `write_file` | write/append a text file |
 | `list_dir` | list a directory |
 | `glob` | find files by `pattern`; optional `path`, `hidden`, `limit` |
 | `grep` | search contents by `pattern`; optional `path`, `include`, `literal`, `caseSensitive`, `limit` |
 
 commands run as the termux user, so `~/`, `/sdcard/`, `pkg`, `git` all work.
+
+### editing files
+
+`edit`, `write`, and `patch` use the OpenCode V2 input names. read a file before
+editing, and do not copy numbered-line prefixes into replacement text.
+`edit` requires a nonempty `oldString` that matches exactly once; use
+`replaceAll: true` to replace every non-overlapping occurrence. `newString`
+may be empty to remove text, but must differ from `oldString`. replacement
+strings are literal, including `$` characters; there is no fuzzy matching.
+`write` creates parent directories and overwrites the entire file.
+`write_file` remains available, including its `append` option.
+
+```text
+edit {"path":"~/my-project/config.ts","oldString":"timeout: 60","newString":"timeout: 30"}
+write {"path":"~/my-project/example.txt","content":"hello\n"}
+```
+
+pass the following format as the `patchText` string to `patch`:
+
+```diff
+*** Begin Patch
+*** Add File: examples/hello.txt
++hello
+*** Update File: src/old.ts
+*** Move to: src/new.ts
+@@
+-export const timeout = 60;
++export const timeout = 30;
+*** Delete File: examples/obsolete.txt
+*** End Patch
+```
+
+each hunk starts with `@@`, followed by space-prefixed unchanged context,
+`-` removals, and `+` additions. `@@ exact anchor line` skips past an exact
+line before matching the hunk. `*** End of File` after a hunk requires its
+context to end at eof. hunks match the first exact sequence after the previous
+hunk; supply enough context to identify the intended location. context-free
+insertions append. a move may omit hunks to rename without editing.
+this is the OpenCode patch envelope, not a standard unified diff with numbered
+`@@ -old +new @@` headers.
+
+all paths, contents, and hunks are validated before any patch writes. existing
+files cannot be overwritten by adds or move destinations, and each resolved
+path may occur only once in a patch. validation errors leave files unchanged;
+filesystem errors during writing can leave a partially applied patch, so inspect
+files before retrying. edits are serialized across clients, but external
+programs can still race with writes. updates preserve existing permissions,
+lf/crlf style, and the presence or absence of a final newline; new patch files
+use lf and a final newline (except empty files). moved files retain permissions.
+
+all editing tools accept UTF-8 text only, reject null bytes, binary/invalid
+UTF-8 existing files and symlink targets, and limit files/results to 16 MiB.
+parent directory symlinks are followed. relative paths resolve from the server
+working directory, `~` is expanded, and tools run as the termux user, not root.
+they do not run formatters, language servers, or OpenCode's permission system;
+the server token grants filesystem access, just as with the shell tools.
+
+run `npm run test:edit` for isolated editing tests. after updating a running
+server, use `./stop.sh` then `./start.sh` and refresh the MCP tool list in
+RikkaHub to expose the new tools.
 
 ### reading files
 
