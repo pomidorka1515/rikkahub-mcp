@@ -56,6 +56,7 @@ click on your assistant:
 | `run_root_command` | same, but as UID 0 via `tsu` (`preserve_env` optional) |
 | `screenshot` | capture the current phone display as a native-resolution png image; requires root via `tsu` |
 | `vibrate` | vibrate without root with `{duration_seconds}`; requires termux:api |
+| `notification` | post a local android notification with required nonblank `{title, body}`; requires termux:api |
 | `flashlight` | turn on without root with `{duration_seconds?}` or off with `{enabled:false}`; requires termux:api |
 | `shell_open` | open a persistent user shell (`cwd`, `env` optional) → `shell_id` |
 | `shell_open_root` | check root access, then open a persistent root shell (`cwd`, `env`, `preserve_env` optional) → `shell_id` |
@@ -171,19 +172,30 @@ client receives an mcp image block. rikkahub must forward tool-result images to
 a vision-capable model. the image shows whatever is currently visible, including
 sensitive notifications; protected screens may appear blank.
 
-### vibration and flashlight
+### notifications, vibration, and flashlight
 
-both tools run as the termux user, without root. install the command package
+these tools run as the termux user, without root. install the command package
 with `pkg install termux-api` and the compatible termux:api android companion app
 from the same source/signing family as termux; grant its requested permissions.
 missing dependencies, denied permissions, and command timeouts return tool errors.
 
 ```text
+notification {"title":"Build complete","body":"Type checking and device tests passed."}
 vibrate {"duration_seconds":0.5}
 flashlight {"duration_seconds":10}
 flashlight {}
 flashlight {"enabled":false}
 ```
+
+`notification` calls `termux-notification --title ... --content ...` with text
+passed as arguments, not shell commands. both `title` (header) and `body` are
+required strings; surrounding whitespace is trimmed and blank text is rejected.
+use it for requested alerts, long-task completion, or important blockers, not
+routine progress. avoid sensitive text because notifications may appear on the
+lock screen. grant notification permission to the termux:api app; android channel
+settings or do-not-disturb may suppress display or sound. success confirms the
+api request, not delivery to the user. notifications are immediate, not scheduled,
+and background jobs do not automatically trigger them.
 
 durations accept fractional seconds from 0.001 to 3600. vibration strength is
 not exposed by termux:api, and silent mode may suppress vibration. flashlight

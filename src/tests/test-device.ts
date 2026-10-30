@@ -24,7 +24,18 @@ try {
     assert.equal(Boolean(result.isError), error, JSON.stringify(result));
     return JSON.stringify(result);
   };
-  assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ["flashlight", "vibrate"]);
+  const tools = (await client.listTools()).tools;
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["flashlight", "notification", "vibrate"]);
+  assert.deepEqual(tools.find((tool) => tool.name === "notification")?.inputSchema.required, ["title", "body"]);
+  const title = 'Build "ready"; $(echo unsafe)';
+  const body = "Tests passed.\nNext: review changes — готово.";
+  assert.match(await call("notification", { title, body }), /notification requested/);
+  assert.deepEqual(calls.pop(), { command: "termux-notification", args: ["--title", title, "--content", body] });
+  for (const args of [{}, { title: "Header" }, { body: "Body" }, { title: "", body: "Body" },
+    { title: "Header", body: " \n " }, { title: " \t ", body: "Body" }, { title: 1, body: "Body" }, { title: "Header", body: null }]) {
+    await call("notification", args, true);
+  }
+  assert.equal(calls.length, 0, "invalid notifications must not invoke termux-api");
   await call("vibrate", { duration_seconds: 0.125 });
   assert.deepEqual(calls.pop(), { command: "termux-vibrate", args: ["-d", "125"] });
   for (const args of [{}, { duration_seconds: 0 }, { duration_seconds: -1 }, { duration_seconds: 3601 }, { duration_seconds: "1" }]) {
@@ -50,6 +61,7 @@ try {
   await call("flashlight", { duration_seconds: 0 }, true);
   assert.equal(calls.length, 0);
   fail = true;
+  assert.match(await call("notification", { title: "Header", body: "Body" }, true), /permission denied/);
   assert.match(await call("vibrate", { duration_seconds: 1 }, true), /permission denied/);
   assert.match(await call("flashlight", {}, true), /permission denied/);
   fail = false;

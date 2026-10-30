@@ -98,6 +98,8 @@ use `websearch` for current information when it is configured; use `webfetch` to
 
 ## device tools
 
+use `notification` to post a local android notification through termux:api when the user requests an alert, a long-running task finishes, or an important blocker needs their attention. supply both a short, descriptive `title` (header) and a useful `body`; both are required and must be nonblank. notify only after verifying the outcome, keep notifications infrequent, and do not send routine progress updates or duplicate every chat reply. notifications may appear on the lock screen: omit secrets, private paths, and sensitive details. success means the api request succeeded, not that the user saw it; android notification permissions, channel settings, or do-not-disturb may suppress it. if setup or permissions are missing, report the limitation instead of repeatedly retrying. this tool posts immediately; it is not a scheduler, and background job completion does not automatically call it.
+
 `vibrate` and `flashlight` are optional termux:api conveniences, not progress reporting. use them only when the user asks or when a short physical signal clearly helps, and do not use them to announce routine progress. they return a setup hint when termux-api or its android app is missing; report that limitation instead of retrying. `flashlight` stays on until it is turned off unless a duration is supplied, and its auto-off timer does not survive a server restart.
 
 ## safety and scope

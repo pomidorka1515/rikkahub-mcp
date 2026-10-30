@@ -31,6 +31,10 @@ export class DeviceController {
 
   constructor(private readonly run: DeviceRunner = runDeviceCommand) {}
 
+  async notification(title: string, body: string): Promise<void> {
+    await this.run("termux-notification", ["--title", title, "--content", body]);
+  }
+
   async vibrate(seconds: number): Promise<void> {
     await this.run("termux-vibrate", ["-d", String(Math.round(seconds * 1000))]);
   }
@@ -67,6 +71,18 @@ export function registerDeviceTools(server: McpServer, controller = devices): vo
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
     }
   };
+
+  server.registerTool("notification", {
+    title: "Show notification",
+    description: "Post an Android notification without root using Termux:API. Requires the termux-api package and compatible Termux:API android app with notification permission. " +
+      "Both title (header) and body text are required and must be nonblank. Use for requested alerts, completion of long-running work, or important blockers needing attention, not routine progress. " +
+      "Text may be visible on the lock screen; omit secrets and sensitive details. Returns after the API request succeeds, not proof the user saw it; Android settings may suppress display or sound.",
+    inputSchema: {
+      title: z.string().trim().min(1).describe("Required nonblank notification header text."),
+      body: z.string().trim().min(1).describe("Required nonblank notification body text."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  }, ({ title, body }) => result(() => controller.notification(title, body), "notification requested"));
 
   server.registerTool("vibrate", {
     title: "Vibrate device",
